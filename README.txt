@@ -34,3 +34,9 @@ kubectl delete po -n hyperledger-k8s -l fabric=internal-dns
 
 5. Add 'docker0' bridge
 docker create network docker0
+# check bridge device name & IP address
+ip link set dev <device name> down
+brctl delbr <device name>
+brctl addbr docker0
+ip addr add <ip address>/16 dev docker0
+ip link set dev docker0 up
