@@ -34,6 +34,8 @@ spec:
         ports:
         - containerPort: 7050
         env:
+        - name: CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE
+          value: cbr0
         - name: ORDERER_GENERAL_LOGLEVEL
           value: debug
         - name: ORDERER_GENERAL_LISTENADDRESS
@@ -115,6 +117,8 @@ spec:
         - containerPort: 7053
           name: clientsvc
         env:
+        - name: CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE
+          value: cbr0
         - name: CORE_VM_ENDPOINT
           value: unix:///host/var/run/docker.sock
         - name: CORE_LOGGING_LEVEL
@@ -202,6 +206,8 @@ spec:
         - containerPort: 7053
           name: clientsvc
         env:
+        - name: CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE
+          value: cbr0
         - name: CORE_VM_ENDPOINT
           value: unix:///host/var/run/docker.sock
         - name: CORE_LOGGING_LEVEL
@@ -291,6 +297,8 @@ spec:
         - containerPort: 7053
           name: clientsvc
         env:
+        - name: CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE
+          value: cbr0
         - name: CORE_VM_ENDPOINT
           value: unix:///host/var/run/docker.sock
         - name: CORE_LOGGING_LEVEL
@@ -378,6 +386,8 @@ spec:
         - containerPort: 7053
           name: clientsvc
         env:
+        - name: CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE
+          value: cbr0
         - name: CORE_VM_ENDPOINT
           value: unix:///host/var/run/docker.sock
         - name: CORE_LOGGING_LEVEL

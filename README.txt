@@ -32,11 +32,13 @@ kubectl get svc -n hyperledger-k8s -o custom-columns="Name:.metadata.name,IP:.sp
 gcloud compute scp
 kubectl delete po -n hyperledger-k8s -l fabric=internal-dns
 
-5. Add 'docker0' bridge
-docker create network docker0
-# check bridge device name & IP address
-ip link set dev <device name> down
-brctl delbr <device name>
-brctl addbr docker0
-ip addr add <ip address>/16 dev docker0
-ip link set dev docker0 up
+5. Edit docker service
+sed -i 's/^DOCKER_OPTS/DOCKER_OPTS\=\"\-\-bridge\=cbr0 \-\-iptables\=false \-\-ip-masq\=false\"/g' /etc/init.d/docker
+service docker restart
+
+6. Do e2e example
+export CHANNEL_NAME=mychannel
+peer channel create -o orderer.example.com:7050 -c $CHANNEL_NAME -f ./channel-artifacts/channel.tx --tls $CORE_PEER_TLS_ENABLED --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+peer channel join -b mychannel.block
+peer chaincode install -n mycc -v 1.0 -p github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example02
+peer chaincode instantiate -o orderer.example.com:7050 --tls $CORE_PEER_TLS_ENABLED --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem -C $CHANNEL_NAME -n mycc -v 1.0 -c '{"Args":["init","a", "100", "b","200"]}' -P "OR ('Org1MSP.member','Org2MSP.member')"
