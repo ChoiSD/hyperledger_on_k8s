@@ -1,0 +1,51 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hyperledger-k8s
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: custom-dns
+  namespace: hyperledger-k8s
+spec:
+  selector:
+    fabric: internal-dns
+  ports:
+  - name: dnssvc
+    protocol: TCP
+    port: 53
+    targetPort: 53
+  - name: dnssvc2
+    protocol: UDP
+    port: 53
+    targetPort: 53
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: custom-dns
+  namespace: hyperledger-k8s
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        fabric: internal-dns
+    spec:
+      containers:
+      - name: custom-dns-container
+        image: pstauffer/bind:stable
+        ports:
+        - containerPort: 53
+        volumeMounts:
+        - mountPath: /etc/bind/
+          name: named-conf
+      volumes:
+      - name: named-conf
+        hostPath:
+          path: /tmp/fabric/dns/
+      nodeSelector:
+        disktype: ssd
+---
