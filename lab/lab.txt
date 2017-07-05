@@ -1,0 +1,133 @@
+1. env up
+  > vagrant up
+2. Generate certificate
+  > sudo mkdir -p /etc/kubernetes/pki; cd /etc/kubernetes/pki
+  Create Cluster root CA
+  > openssl genrsa -out ca.key 2048
+  > openssl req -x509 -new -nodes -key ca.key -days 10000 -out ca.pem -subj "/CN=kube-ca"
+  Create k8s API server keypair
+    Replace K8S_SERVICE_IP & MASTER_HOST
+  > MASTER_HOST=192.168.205.10
+  > K8S_SERVICE_IP=10.3.0.1
+  > echo "[req]
+req_extensions = v3_req
+distinguished_name = req_distinguished_name
+[req_distinguished_name]
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = kubernetes
+DNS.2 = kubernetes.default
+DNS.3 = kubernetes.default.svc
+DNS.4 = kubernetes.default.svc.cluster.local
+IP.1 = ${K8S_SERVICE_IP}
+IP.2 = ${MASTER_HOST}" | sudo tee -a openssl.cnf
+  > openssl genrsa -out apiserver.key 2048
+  > openssl req -new -key apiserver.key -out apiserver.csr -subj "/CN=kube-apiserver" -config openssl.cnf
+  > openssl x509 -req -in apiserver.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out apiserver.pem -days 365 -extensions v3_req -extfile openssl.cnf
+  Create k8s worker keypair
+  > echo "[req]
+req_extensions = v3_req
+distinguished_name = req_distinguished_name
+[req_distinguished_name]
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+[alt_names]
+IP.1 = $ENV::WORKER_IP" | sudo tee -a worker-openssl.cnf
+    Replace WORKER_FQND & WORKER_IP per node
+  > openssl genrsa -out ${WORKER_FQDN}-worker.key 2048
+  > WORKER_IP=${WORKER_IP} openssl req -new -key ${WORKER_FQDN}-worker.key -out ${WORKER_FQDN}-worker.csr -subj "/CN=${WORKER_FQDN}" -config worker-openssl.cnf
+  > WORKER_IP=${WORKER_IP} openssl x509 -req -in ${WORKER_FQDN}-worker.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out ${WORKER_FQDN}-worker.pem -days 365 -extensions v3_req -extfile worker-openssl.cnf
+
+  > WORKER_FQDN=k8s-worker1
+  > WORKER_IP=192.168.205.11
+  > openssl genrsa -out ${WORKER_FQDN}-worker.key 2048
+  > WORKER_IP=${WORKER_IP} openssl req -new -key ${WORKER_FQDN}-worker.key -out ${WORKER_FQDN}-worker.csr -subj "/CN=${WORKER_FQDN}" -config worker-openssl.cnf
+  > WORKER_IP=${WORKER_IP} openssl x509 -req -in ${WORKER_FQDN}-worker.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out ${WORKER_FQDN}-worker.pem -days 365 -extensions v3_req -extfile worker-openssl.cnf
+  > WORKER_FQDN=k8s-worker2
+  > WORKER_IP=192.168.205.12
+  > openssl genrsa -out ${WORKER_FQDN}-worker.key 2048
+  > WORKER_IP=${WORKER_IP} openssl req -new -key ${WORKER_FQDN}-worker.key -out ${WORKER_FQDN}-worker.csr -subj "/CN=${WORKER_FQDN}" -config worker-openssl.cnf
+  > WORKER_IP=${WORKER_IP} openssl x509 -req -in ${WORKER_FQDN}-worker.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out ${WORKER_FQDN}-worker.pem -days 365 -extensions v3_req -extfile worker-openssl.cnf
+  Generate Cluster Admin keypari
+  > openssl genrsa -out admin.key 2048
+  > openssl req -new -key admin.key -out admin.csr -subj "/CN=kube-admin"
+  > openssl x509 -req -in admin.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out admin.pem -days 365
+  > sudo chmod 600 *.key
+
+3. Configure etcd on k8s-master
+  > echo "[Unit]
+Description=Etcd
+Documentation=https://coreos.com/etcd/docs/latest
+After=network.target docker.service
+
+[Service]
+ExecStart=/usr/bin/docker run \
+			--rm \
+			-p 2379:2379 \
+			-p 2380:2380 \
+			--name etcd \
+			--volume=/tmp/etcd-data:/etcd-data \
+			quay.io/coreos/etcd:v3.2.1 \
+			/usr/local/bin/etcd \
+			--name k8s-etcd-1 \
+			--data-dir /etcd-data \
+			--listen-client-urls http://0.0.0.0:2379 \
+			--advertise-client-urls http://0.0.0.0:2379 \
+			--listen-peer-urls http://0.0.0.0:2380 \
+			--initial-advertise-peer-urls http://0.0.0.0:2380 \
+			--initial-cluster k8s-etcd-1=http://0.0.0.0:2380 \
+			--initial-cluster-token k8s-etcd-token \
+			--initial-cluster-state new \
+			--auto-compaction-retention 1
+ExecReload=/bin/kill -s HUP $MAINPID
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/etcd.service
+  > sudo systemctl daemon-reload
+  > sudo systemctl start etcd
+
+4. Configure flannel on each machine
+  > vagrant ssh k8s-master
+  > sudo mkdir -p /etc/flannel
+  > ADVERTISE_IP=192.168.205.10
+  > ETCD_ENDPOINTS=192.168.205.10:2379
+  > echo "FLANNELD_IFACE=${ADVERTISE_IP}
+FLANNELD_ETCD_ENDPOINTS=${ETCD_ENDPOINTS}" | sudo tee -a /etc/flannel/options.env
+  > tar -xvzf flanneld.tgz
+  > sudo mv flanneld /usr/local/bin; sudo chown root:root /usr/local/bin/flanneld
+  > sudo docker exec etcd /bin/sh -c "export ETCDCTL_API=3 && /usr/local/bin/etcdctl put /coreos.com/network/config '{"Network": "10.0.0.0/8", "SubnetLen": 24, "SubnetMin": "10.10.0.0", "SubnetMax": "10.99.0.0", "Backend": {"Type": "vxlan", "VNI": 100, "Port": 8472}}'"
+  > echo "[Unit]
+Description=flanneld
+Documentation=https://coreos.com/flanneld/docs/latest
+After=etcd.service
+
+[Service]
+ExecStart=/usr/local/bin/flanneld \
+			-iface=192.168.205.10
+ExecReload=/bin/kill -s HUP $MAINPID
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/flanneld.service
+  > sudo systemctl daemon-reload; sudo systemctl start flanneld
+  > exit
