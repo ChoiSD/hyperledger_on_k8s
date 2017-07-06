@@ -37,7 +37,7 @@ basicConstraints = CA:FALSE
 keyUsage = nonRepudiation, digitalSignature, keyEncipherment
 subjectAltName = @alt_names
 [alt_names]
-IP.1 = $ENV::WORKER_IP" | sudo tee -a worker-openssl.cnf
+IP.1 = \$ENV::WORKER_IP" | sudo tee -a worker-openssl.cnf
     Replace WORKER_FQND & WORKER_IP per node
   > openssl genrsa -out ${WORKER_FQDN}-worker.key 2048
   > WORKER_IP=${WORKER_IP} openssl req -new -key ${WORKER_FQDN}-worker.key -out ${WORKER_FQDN}-worker.csr -subj "/CN=${WORKER_FQDN}" -config worker-openssl.cnf
@@ -53,11 +53,74 @@ IP.1 = $ENV::WORKER_IP" | sudo tee -a worker-openssl.cnf
   > openssl genrsa -out ${WORKER_FQDN}-worker.key 2048
   > WORKER_IP=${WORKER_IP} openssl req -new -key ${WORKER_FQDN}-worker.key -out ${WORKER_FQDN}-worker.csr -subj "/CN=${WORKER_FQDN}" -config worker-openssl.cnf
   > WORKER_IP=${WORKER_IP} openssl x509 -req -in ${WORKER_FQDN}-worker.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out ${WORKER_FQDN}-worker.pem -days 365 -extensions v3_req -extfile worker-openssl.cnf
-  Generate Cluster Admin keypari
+  Generate Cluster Admin keypair
   > openssl genrsa -out admin.key 2048
   > openssl req -new -key admin.key -out admin.csr -subj "/CN=kube-admin"
   > openssl x509 -req -in admin.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out admin.pem -days 365
   > sudo chmod 600 *.key
+
+
+3. Prepare credentials
+  > CLUSTER_NAME=k8s-sdchoi
+  > CA_CERT=/etc/kubernetes/pki/ca.pem
+  > MASTER_IP=192.168.205.10
+  > CLI_CERT=/etc/kubernetes/pki/admin.pem
+  > CLI_KEY=/etc/kubernetes/pki/admin.key
+  > TOKEN=$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64 | tr -d "=+/" | dd bs=32 count=1 2>/dev/null)
+  > CONTEXT_NAME=default-context
+  > USER=admin
+  > kubectl config set-cluster $CLUSTER_NAME --certificate-authority=$CA_CERT --embed-certs=true --server=https://$MASTER_IP
+  > kubectl config set-credentials $USER --client-certificate=$CLI_CERT --client-key=$CLI_KEY --embed-certs=true --token=$TOKEN
+  > kubectl config set-context $CONTEXT_NAME --cluster=$CLUSTER_NAME --user=$USER
+  > kubectl config use-context $CONTEXT_NAME
+  > sudo cp ~/.kube/config .
+
+4. Configure docker
+  > sudo systemctl stop docker
+  > sudo iptables -t nat -F
+  > sudo ip link set docker0 down
+  > sudo ip link delete docker0
+  > echo "[Unit]
+Description=Docker Application Container Engine
+Documentation=https://docs.docker.com
+After=network-online.target docker.socket firewalld.service
+Wants=network-online.target
+Requires=docker.socket
+
+[Service]
+Type=notify
+# the default is not to use systemd for cgroups because the delegate issues still
+# exists and systemd currently does not support the cgroup feature set required
+# for containers run by docker
+EnvironmentFile=/etc/default/docker
+ExecStart=/usr/bin/dockerd -H fd:// \$DOCKER_OPTS
+ExecReload=/bin/kill -s HUP $MAINPID
+LimitNOFILE=1048576
+# Having non-zero Limit*s causes performance problems due to accounting overhead
+# in the kernel. We recommend using cgroups to do container-local accounting.
+LimitNPROC=infinity
+LimitCORE=infinity
+LimitNOFILE=1000000
+# Uncomment TasksMax if your systemd version supports it.
+# Only systemd 226 and above support this version.
+TasksMax=infinity
+TimeoutStartSec=0
+# set delegate yes so that systemd does not reset the cgroups of docker containers
+Delegate=yes
+# kill only the docker process, not all processes in the cgroup
+KillMode=process
+# restart the docker process if it exits prematurely
+Restart=on-failure
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/docker.service
+  > echo "DOCKER_OPTS=\"--bridge=cbr0 --iptables=false --ip-masq=false --mtu=1450\"" |  sudo tee -a /etc/default/docker
+  > sudo ip link add name cbr0 type bridge
+  > sudo ip link set dev cbr0 mtu 1450
+  > sudo ip addr add 10.5.0.1/16 dev cbr0
+  > sudo ip link set dev cbr0 up
 
 3. Configure etcd on k8s-master
   > echo "[Unit]
@@ -68,8 +131,7 @@ After=network.target docker.service
 [Service]
 ExecStart=/usr/bin/docker run \
 			--rm \
-			-p 2379:2379 \
-			-p 2380:2380 \
+			--net host \
 			--name etcd \
 			--volume=/tmp/etcd-data:/etcd-data \
 			quay.io/coreos/etcd:v3.2.1 \
@@ -84,7 +146,7 @@ ExecStart=/usr/bin/docker run \
 			--initial-cluster-token k8s-etcd-token \
 			--initial-cluster-state new \
 			--auto-compaction-retention 1
-ExecReload=/bin/kill -s HUP $MAINPID
+ExecReload=/bin/kill -s HUP \$MAINPID
 LimitNPROC=infinity
 LimitCORE=infinity
 TasksMax=infinity
@@ -98,17 +160,260 @@ StartLimitInterval=60s
 WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/etcd.service
   > sudo systemctl daemon-reload
   > sudo systemctl start etcd
+  > curl -X PUT http://127.0.0.1:2379/v2/keys/k8s/network/config -d value="{ \"Network\": \"172.30.0.0/16\", \"SubnetLen\": 24, \"Backend\": { \"Type\": \"vxlan\" } }"
 
-4. Configure flannel on each machine
+4. Configure flannel (on all host)
+  > echo "# Flanneld configuration options
+
+# etcd url location.  Point this to the server where etcd runs
+FLANNEL_ETCD_ENDPOINTS=\"http://192.168.205.10:2379\"
+
+# etcd config key.  This is the configuration key that flannel queries
+# For address range assignment
+FLANNEL_ETCD_PREFIX=\"/k8s/network\"
+
+# Any additional options that you want to pass
+FLANNEL_OPTIONS=\"-iface=192.168.205.10\"" | sudo tee -a /etc/default/flanneld
+
+  > tar -xvzf flannel.tgz
+  > sudo chown root:root flanneld
+  > sudo cp flanneld /usr/local/bin
+  > echo "[Unit]
+Description=flanneld
+Documentation=https://coreos.com/flannel/docs/latest
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/default/flanneld
+ExecStart=/usr/local/bin/flanneld -etcd-endpoints \$FLANNEL_ETCD_ENDPOINTS -etcd-prefix \$FLANNEL_ETCD_PREFIX \$FLANNEL_OPTIONS
+ExecReload=/bin/kill -s HUP \$MAINPID
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/flanneld.service
+  > sudo systemctl daemon-reload
+  > sudo systemctl start flanneld
+
+5. Configure kube-apiserver
+  > chmod +x kube-apiserver; sudo chown root:root kube-apiserver
+  > sudo mv kube-apiserver /usr/local/bin
+  > echo "# The address on the local server to listen to.
+KUBE_API_ADDRESS=\"--address=0.0.0.0\"
+
+# The port on the local server to listen on.
+KUBE_API_PORT=\"--port=8080\"
+
+# Port kubelets listen on
+KUBELET_PORT=\"--kubelet-port=10250\"
+
+# Address range to use for services
+KUBE_SERVICE_ADDRESSES=\"--service-cluster-ip-range=10.254.0.0/16\"
+KUBE_ETCD_SERVERS=\"--etcd-servers=http://127.0.0.1:2379\"
+KUBE_ADMISSION_CONTROL=\"--admission-control=NamespaceLifecycle,NamespaceExists,LimitRanger,SecurityContextDeny,ServiceAccount,ResourceQuota\"
+
+# Add your own!
+KUBE_API_ARGS=\"\"" | sudo tee -a /etc/kubernetes/apiserver
+  > echo "[Unit]
+Description=kube-apiserver
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/kubernetes/apiserver
+ExecStart=/usr/local/bin/kube-apiserver \$KUBE_API_ADDRESS \$KUBE_API_PORT \$KUBELET_PORT \$KUBE_SERVICE_ADDRESSES \$KUBE_ETCD_SERVERS \$KUBE_ADMISSION_CONTROL \$KUBE_API_ARGS
+ExecReload=/bin/kill -s HUP \$MAINPID
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kube-apiserver.service
+
+  > sudo systemctl daemon-reload
+  > sudo systemctl start kube-apiserver
+
+6. Configure kube-controller-manager
+  > chmod +x kube-controller-manager; sudo chown root:root kube-controller-manager
+  > sudo mv kube-controller-manager /usr/local/bin
+  > echo "# The address of the Kubernetes API server
+KUBE_MASTER=\"--master=http://192.168.205.10:8080\"
+
+# Add your own!
+KUBE_CONTROLLER_ARGS=\"--service-account-private-key-file=/etc/kubernetes/pki/apiserver.key --root-ca-file=/etc/kubernetes/pki/apiserver.pem\"" | sudo tee -a /etc/kubernetes/controller-manager
+  > echo "[Unit]
+Description=kube-controller-manager
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/kubernetes/controller-manager
+ExecStart=/usr/local/bin/kube-controller-manager \$KUBE_MASTER \$KUBE_CONTROLLER_ARGS
+ExecReload=/bin/kill -s HUP \$MAINPID
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kube-controller-manager.service
+
+  > sudo systemctl daemon-reload
+  > sudo systemctl start kube-controller-manager
+
+7. Configure kube-scheduler
+  > chmod +x kube-scheduler; sudo chown root:root kube-scheduler
+  > sudo mv kube-scheduler /usr/local/bin
+  > echo "# The address of the Kubernetes API server
+KUBE_MASTER=\"--master=http://192.168.205.10:8080\"
+
+# Add your own!
+KUBE_SCHEDULER_ARGS=\"\"" | sudo tee -a /etc/kubernetes/scheduler
+  > echo "[Unit]
+Description=kube-scheduler
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/kubernetes/scheduler
+ExecStart=/usr/local/bin/kube-scheduler \$KUBE_MASTER \$KUBE_SCHEDULER_ARGS
+ExecReload=/bin/kill -s HUP \$MAINPID
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kube-scheduler.service
+
+  > sudo systemctl daemon-reload
+  > sudo systemctl start kube-scheduler
+
+8. Configure kube-proxy (on all node)
+  > chmod +x kube-proxy; sudo chown root:root kube-proxy
+  > sudo mv kube-proxy /usr/local/bin
+  > echo "# The address of the Kubernetes API server
+KUBE_MASTER=\"--master=http://192.168.205.10:8080\"
+
+# Add your own!
+KUBE_PROXY_ARGS=\"\"" | sudo tee -a /etc/kubernetes/proxy
+
+  > echo "[Unit]
+Description=kube-proxy
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/kubernetes/proxy
+ExecStart=/usr/local/bin/kube-proxy \$KUBE_MASTER \$KUBE_PROXY_ARGS
+ExecReload=/bin/kill -s HUP \$MAINPID
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kube-proxy.service
+
+  > sudo systemctl daemon-reload
+  > sudo systemctl start kube-proxy
+
+9. Configure kubelet (on all node)
+  > chmod +x kubelet; sudo chown root:root kubelet
+  > sudo mv kubelet /usr/local/bin
+  > echo "# The address for the info server to serve on
+KUBELET_ADDRESS=\"--address=0.0.0.0\"
+
+# The port for the info server to serve on
+KUBELET_PORT=\"--port=10250\"
+
+# You may leave this blank to use the actual hostname
+# Check the node number!
+KUBELET_HOSTNAME=\"\"
+
+# Location of the api-server
+KUBELET_API_SERVER=\"--api-servers=http://192.168.205.10:8080\"
+
+# Add your own!
+KUBELET_ARGS=\"\"" | sudo tee -a /etc/kubernetes/kubelet
+
+  > echo "[Unit]
+Description=kubelet
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/kubernetes/kubelet
+ExecStart=/usr/local/bin/kubelet \$KUBELET_ADDRESS \$KUBELET_PORT \$KUBELET_HOSTNAME \$KUBELET_API_SERVER \$KUBELET_ARGS
+ExecReload=/bin/kill -s HUP \$MAINPID
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kubelet.service
+
+  > sudo systemctl daemon-reload
+  > sudo systemctl start kubelet
+
+10. Configure kubectl (on master node)
+  > chmod +x kubectl; sudo chown root:root kubectl
+  > sudo mv kubectl /usr/local/bin
+
+11. Deploy kube-dns
+  > for item in Makefile kubedns-controller.yaml.base kubedns-svc.yaml.base transforms2salt.sed transforms2sed.sed; do
+    wget https://raw.githubusercontent.com/kubernetes/kubernetes/master/cluster/addons/dns/$item
+done
+  > DNS_SERVER_IP=10.254.0.10
+  > DNS_DOMAIN=cluster.local
+  > cat <<EOF > transforms2sed.sed
+s/__PILLAR__DNS__SERVER__/$DNS_SERVER_IP/g
+s/__PILLAR__DNS__DOMAIN__/$DNS_DOMAIN/g
+/__PILLAR__FEDERATIONS__DOMAIN__MAP__/d
+s/__MACHINE_GENERATED_WARNING__/Warning: This is a file generated from the base underscore template file: __SOURCE_FILENAME__/g
+EOF
+  > sed -f transforms2salt.sed kubedns-controller.yaml.base | sed s/__SOURCE_FILENAME__/kubedns-controller.yaml.base/g > kubedns-controller.yaml.in
+  > sed -f transforms2salt.sed kubedns-svc.yaml.base | sed s/__SOURCE_FILENAME__/kubedns-svc.yaml.base/g > kubedns-svc.yaml.in
+  > sed -f transforms2sed.sed kubedns-controller.yaml.base  | sed s/__SOURCE_FILENAME__/kubedns-controller.yaml.base/g > kubedns-controller.yaml.sed
+  > sed -f transforms2sed.sed kubedns-svc.yaml.base  | sed s/__SOURCE_FILENAME__/kubedns-svc.yaml.base/g > kubedns-svc.yaml.sed
+  > sed -i 's/serviceAccountName: kube-dns/serviceAccountName: default/g' kubedns-controller.yaml.sed
+  > kubectl create -f kubedns-controller.yaml.sed
+  > kubectl create -f kubedns-svc.yaml.sed
+  > kubectl get all --all-namespaces
+  > sed -i 's/KUBELET_ARGS=\"\"/KUBELET_ARGS=\"--cluster_dns=10.254.0.10 --cluster_domain=cluster.local\"/g' /etc/kubernetes/kubelet
+  > sudo systemctl restart kubelet; sudo systemctl status kubelet
+
+
+
+
+. Configure flannel on each machine
   > vagrant ssh k8s-master
-  > sudo mkdir -p /etc/flannel
-  > ADVERTISE_IP=192.168.205.10
-  > ETCD_ENDPOINTS=192.168.205.10:2379
-  > echo "FLANNELD_IFACE=${ADVERTISE_IP}
-FLANNELD_ETCD_ENDPOINTS=${ETCD_ENDPOINTS}" | sudo tee -a /etc/flannel/options.env
   > tar -xvzf flanneld.tgz
   > sudo mv flanneld /usr/local/bin; sudo chown root:root /usr/local/bin/flanneld
-  > sudo docker exec etcd /bin/sh -c "export ETCDCTL_API=3 && /usr/local/bin/etcdctl put /coreos.com/network/config '{"Network": "10.0.0.0/8", "SubnetLen": 24, "SubnetMin": "10.10.0.0", "SubnetMax": "10.99.0.0", "Backend": {"Type": "vxlan", "VNI": 100, "Port": 8472}}'"
+  > curl http://127.0.0.1:2379/v2/keys/coreos.com/network/config -XPUT -d value="{\"Network\":\"10.0.0.0/8\",\"SubnetLen\":24,\"Backend\":{\"Type\":\"vxlan\",\"Port\":8432}}"
   > echo "[Unit]
 Description=flanneld
 Documentation=https://coreos.com/flanneld/docs/latest
