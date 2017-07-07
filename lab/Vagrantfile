@@ -99,7 +99,7 @@ Vagrant.configure(2) do |config|
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
     sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
     sudo apt-get update
-    sudo apt-get install -y docker-ce bridge-utils
+    sudo apt-get install -y docker-ce
     echo "DEFAULT_FORWARD_POLICY=\"ACCEPT\"" | sudo tee -a /etc/default/ufw
     sudo ufw reload
     curl -L https://github.com/coreos/etcd/releases/download/v3.2.1/etcd-v3.2.1-linux-amd64.tar.gz -o etcd.tgz
@@ -113,5 +113,10 @@ Vagrant.configure(2) do |config|
     wget https://storage.googleapis.com/kubernetes-release/release/v1.6.7/bin/linux/amd64/kube-proxy
     wget https://raw.githubusercontent.com/kubernetes/kubernetes/master/cluster/saltbase/salt/etcd/etcd.manifest
     wget https://raw.githubusercontent.com/kubernetes/kubernetes/master/cluster/saltbase/salt/etcd/init.sls
+    sudo chmod +x /home/ubuntu/kube*
+    sudo mv /home/ubuntu/kube* /usr/local/bin/
+    sudo mkdir -p /etc/kubernetes/manifests
+    sudo mkdir /etc/kubernetes/pki
+    sudo mv /home/ubuntu/etcd.manifest /etc/kubernetes/manifests
   SHELL
 end

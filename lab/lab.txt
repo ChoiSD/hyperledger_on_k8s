@@ -73,7 +73,7 @@ IP.1 = \$ENV::WORKER_IP" | sudo tee -a worker-openssl.cnf
   > kubectl config set-credentials $USER --client-certificate=$CLI_CERT --client-key=$CLI_KEY --embed-certs=true --token=$TOKEN
   > kubectl config set-context $CONTEXT_NAME --cluster=$CLUSTER_NAME --user=$USER
   > kubectl config use-context $CONTEXT_NAME
-  > sudo cp ~/.kube/config .
+  > sudo cp ~/.kube/config /etc/kubernetes
 
 4. Configure docker
   > sudo systemctl stop docker
@@ -83,7 +83,7 @@ IP.1 = \$ENV::WORKER_IP" | sudo tee -a worker-openssl.cnf
   > echo "[Unit]
 Description=Docker Application Container Engine
 Documentation=https://docs.docker.com
-After=network-online.target docker.socket firewalld.service
+After=network-online.target docker.socket firewalld.service kubelet.service
 Wants=network-online.target
 Requires=docker.socket
 
@@ -95,12 +95,11 @@ Type=notify
 EnvironmentFile=/etc/default/docker
 ExecStart=/usr/bin/dockerd -H fd:// \$DOCKER_OPTS
 ExecReload=/bin/kill -s HUP $MAINPID
-LimitNOFILE=1048576
+LimitNOFILE=1000000
 # Having non-zero Limit*s causes performance problems due to accounting overhead
 # in the kernel. We recommend using cgroups to do container-local accounting.
 LimitNPROC=infinity
 LimitCORE=infinity
-LimitNOFILE=1000000
 # Uncomment TasksMax if your systemd version supports it.
 # Only systemd 226 and above support this version.
 TasksMax=infinity
@@ -117,36 +116,36 @@ StartLimitInterval=60s
 [Install]
 WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/docker.service
   > echo "DOCKER_OPTS=\"--bridge=cbr0 --iptables=false --ip-masq=false --mtu=1450\"" |  sudo tee -a /etc/default/docker
-  > sudo ip link add name cbr0 type bridge
-  > sudo ip link set dev cbr0 mtu 1450
-  > sudo ip addr add 10.5.0.1/16 dev cbr0
-  > sudo ip link set dev cbr0 up
 
-3. Configure etcd on k8s-master
+5. Configure kubelet
+  > echo "# The address for the info server to serve on
+KUBELET_ADDRESS=\"--address=0.0.0.0\"
+
+# The port for the info server to serve on
+KUBELET_PORT=\"--port=10250\"
+
+# You may leave this blank to use the actual hostname
+# Check the node number!
+KUBELET_HOSTNAME=\"\"
+
+# Location of the api-server
+KUBELET_API_SERVER=\"--api-servers=http://192.168.205.10:8080\"
+
+# Manifests
+KUBELET_MANIFESTS=\"--config=/etc/kubernetes/manifests\"
+
+# Add your own!
+KUBELET_ARGS=\"--cluster-dns=10.254.0.10 --cluster-domain=cluster.local --configure-cbr0=true --register-node=true\"" | sudo tee -a /etc/kubernetes/kubelet
+
   > echo "[Unit]
-Description=Etcd
-Documentation=https://coreos.com/etcd/docs/latest
+Description=kubelet
+Documentation=https://kubernetes.io/docs/admin/kubelet/
 After=network.target docker.service
 
 [Service]
-ExecStart=/usr/bin/docker run \
-			--rm \
-			--net host \
-			--name etcd \
-			--volume=/tmp/etcd-data:/etcd-data \
-			quay.io/coreos/etcd:v3.2.1 \
-			/usr/local/bin/etcd \
-			--name k8s-etcd-1 \
-			--data-dir /etcd-data \
-			--listen-client-urls http://0.0.0.0:2379 \
-			--advertise-client-urls http://0.0.0.0:2379 \
-			--listen-peer-urls http://0.0.0.0:2380 \
-			--initial-advertise-peer-urls http://0.0.0.0:2380 \
-			--initial-cluster k8s-etcd-1=http://0.0.0.0:2380 \
-			--initial-cluster-token k8s-etcd-token \
-			--initial-cluster-state new \
-			--auto-compaction-retention 1
-ExecReload=/bin/kill -s HUP \$MAINPID
+EnvironmentFile=/etc/kubernetes/kubelet
+ExecStart=/usr/local/bin/kubelet \$KUBELET_ADDRESS \$KUBELET_PORT \$KUBELET_HOSTNAME \$KUBELET_API_SERVER \$KUBELET_MANIFESTS \$KUBELET_ARGS
+ExecReload=/bin/kill -s HUP $MAINPID
 LimitNPROC=infinity
 LimitCORE=infinity
 TasksMax=infinity
@@ -157,157 +156,10 @@ StartLimitBurst=3
 StartLimitInterval=60s
 
 [Install]
-WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/etcd.service
-  > sudo systemctl daemon-reload
-  > sudo systemctl start etcd
-  > curl -X PUT http://127.0.0.1:2379/v2/keys/k8s/network/config -d value="{ \"Network\": \"172.30.0.0/16\", \"SubnetLen\": 24, \"Backend\": { \"Type\": \"vxlan\" } }"
+WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kubelet.service
 
-4. Configure flannel (on all host)
-  > echo "# Flanneld configuration options
 
-# etcd url location.  Point this to the server where etcd runs
-FLANNEL_ETCD_ENDPOINTS=\"http://192.168.205.10:2379\"
-
-# etcd config key.  This is the configuration key that flannel queries
-# For address range assignment
-FLANNEL_ETCD_PREFIX=\"/k8s/network\"
-
-# Any additional options that you want to pass
-FLANNEL_OPTIONS=\"-iface=192.168.205.10\"" | sudo tee -a /etc/default/flanneld
-
-  > tar -xvzf flannel.tgz
-  > sudo chown root:root flanneld
-  > sudo cp flanneld /usr/local/bin
-  > echo "[Unit]
-Description=flanneld
-Documentation=https://coreos.com/flannel/docs/latest
-After=network.target
-
-[Service]
-EnvironmentFile=/etc/default/flanneld
-ExecStart=/usr/local/bin/flanneld -etcd-endpoints \$FLANNEL_ETCD_ENDPOINTS -etcd-prefix \$FLANNEL_ETCD_PREFIX \$FLANNEL_OPTIONS
-ExecReload=/bin/kill -s HUP \$MAINPID
-LimitNPROC=infinity
-LimitCORE=infinity
-TasksMax=infinity
-TimeoutStartSec=0
-KillMode=process
-Restart=always
-StartLimitBurst=3
-StartLimitInterval=60s
-
-[Install]
-WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/flanneld.service
-  > sudo systemctl daemon-reload
-  > sudo systemctl start flanneld
-
-5. Configure kube-apiserver
-  > chmod +x kube-apiserver; sudo chown root:root kube-apiserver
-  > sudo mv kube-apiserver /usr/local/bin
-  > echo "# The address on the local server to listen to.
-KUBE_API_ADDRESS=\"--address=0.0.0.0\"
-
-# The port on the local server to listen on.
-KUBE_API_PORT=\"--port=8080\"
-
-# Port kubelets listen on
-KUBELET_PORT=\"--kubelet-port=10250\"
-
-# Address range to use for services
-KUBE_SERVICE_ADDRESSES=\"--service-cluster-ip-range=10.254.0.0/16\"
-KUBE_ETCD_SERVERS=\"--etcd-servers=http://127.0.0.1:2379\"
-KUBE_ADMISSION_CONTROL=\"--admission-control=NamespaceLifecycle,NamespaceExists,LimitRanger,SecurityContextDeny,ServiceAccount,ResourceQuota\"
-
-# Add your own!
-KUBE_API_ARGS=\"\"" | sudo tee -a /etc/kubernetes/apiserver
-  > echo "[Unit]
-Description=kube-apiserver
-After=network.target
-
-[Service]
-EnvironmentFile=/etc/kubernetes/apiserver
-ExecStart=/usr/local/bin/kube-apiserver \$KUBE_API_ADDRESS \$KUBE_API_PORT \$KUBELET_PORT \$KUBE_SERVICE_ADDRESSES \$KUBE_ETCD_SERVERS \$KUBE_ADMISSION_CONTROL \$KUBE_API_ARGS
-ExecReload=/bin/kill -s HUP \$MAINPID
-LimitNPROC=infinity
-LimitCORE=infinity
-TasksMax=infinity
-TimeoutStartSec=0
-KillMode=process
-Restart=always
-StartLimitBurst=3
-StartLimitInterval=60s
-
-[Install]
-WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kube-apiserver.service
-
-  > sudo systemctl daemon-reload
-  > sudo systemctl start kube-apiserver
-
-6. Configure kube-controller-manager
-  > chmod +x kube-controller-manager; sudo chown root:root kube-controller-manager
-  > sudo mv kube-controller-manager /usr/local/bin
-  > echo "# The address of the Kubernetes API server
-KUBE_MASTER=\"--master=http://192.168.205.10:8080\"
-
-# Add your own!
-KUBE_CONTROLLER_ARGS=\"--service-account-private-key-file=/etc/kubernetes/pki/apiserver.key --root-ca-file=/etc/kubernetes/pki/apiserver.pem\"" | sudo tee -a /etc/kubernetes/controller-manager
-  > echo "[Unit]
-Description=kube-controller-manager
-After=network.target
-
-[Service]
-EnvironmentFile=/etc/kubernetes/controller-manager
-ExecStart=/usr/local/bin/kube-controller-manager \$KUBE_MASTER \$KUBE_CONTROLLER_ARGS
-ExecReload=/bin/kill -s HUP \$MAINPID
-LimitNPROC=infinity
-LimitCORE=infinity
-TasksMax=infinity
-TimeoutStartSec=0
-KillMode=process
-Restart=always
-StartLimitBurst=3
-StartLimitInterval=60s
-
-[Install]
-WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kube-controller-manager.service
-
-  > sudo systemctl daemon-reload
-  > sudo systemctl start kube-controller-manager
-
-7. Configure kube-scheduler
-  > chmod +x kube-scheduler; sudo chown root:root kube-scheduler
-  > sudo mv kube-scheduler /usr/local/bin
-  > echo "# The address of the Kubernetes API server
-KUBE_MASTER=\"--master=http://192.168.205.10:8080\"
-
-# Add your own!
-KUBE_SCHEDULER_ARGS=\"\"" | sudo tee -a /etc/kubernetes/scheduler
-  > echo "[Unit]
-Description=kube-scheduler
-After=network.target
-
-[Service]
-EnvironmentFile=/etc/kubernetes/scheduler
-ExecStart=/usr/local/bin/kube-scheduler \$KUBE_MASTER \$KUBE_SCHEDULER_ARGS
-ExecReload=/bin/kill -s HUP \$MAINPID
-LimitNPROC=infinity
-LimitCORE=infinity
-TasksMax=infinity
-TimeoutStartSec=0
-KillMode=process
-Restart=always
-StartLimitBurst=3
-StartLimitInterval=60s
-
-[Install]
-WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kube-scheduler.service
-
-  > sudo systemctl daemon-reload
-  > sudo systemctl start kube-scheduler
-
-8. Configure kube-proxy (on all node)
-  > chmod +x kube-proxy; sudo chown root:root kube-proxy
-  > sudo mv kube-proxy /usr/local/bin
+6. Configure kube-proxy
   > echo "# The address of the Kubernetes API server
 KUBE_MASTER=\"--master=http://192.168.205.10:8080\"
 
@@ -334,56 +186,274 @@ StartLimitInterval=60s
 [Install]
 WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kube-proxy.service
 
-  > sudo systemctl daemon-reload
-  > sudo systemctl start kube-proxy
 
-9. Configure kubelet (on all node)
-  > chmod +x kubelet; sudo chown root:root kubelet
-  > sudo mv kubelet /usr/local/bin
-  > echo "# The address for the info server to serve on
-KUBELET_ADDRESS=\"--address=0.0.0.0\"
-
-# The port for the info server to serve on
-KUBELET_PORT=\"--port=10250\"
-
-# You may leave this blank to use the actual hostname
-# Check the node number!
-KUBELET_HOSTNAME=\"\"
-
-# Location of the api-server
-KUBELET_API_SERVER=\"--api-servers=http://192.168.205.10:8080\"
-
-# Add your own!
-KUBELET_ARGS=\"\"" | sudo tee -a /etc/kubernetes/kubelet
-
-  > echo "[Unit]
-Description=kubelet
-After=network.target
-
-[Service]
-EnvironmentFile=/etc/kubernetes/kubelet
-ExecStart=/usr/local/bin/kubelet \$KUBELET_ADDRESS \$KUBELET_PORT \$KUBELET_HOSTNAME \$KUBELET_API_SERVER \$KUBELET_ARGS
-ExecReload=/bin/kill -s HUP \$MAINPID
-LimitNPROC=infinity
-LimitCORE=infinity
-TasksMax=infinity
-TimeoutStartSec=0
-KillMode=process
-Restart=always
-StartLimitBurst=3
-StartLimitInterval=60s
-
-[Install]
-WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/kubelet.service
-
-  > sudo systemctl daemon-reload
+7. Configure the rests
   > sudo systemctl start kubelet
+  > sudo systemctl start docker
+  > sudo systemctl start kube-proxy
+  > HYPERKUBE_IMAGE=gcr.io/google_containers/hyperkube:v1.6.7
+  > echo "{
+\"apiVersion\": \"v1\",
+\"kind\": \"Pod\",
+\"metadata\": {
+  \"name\":\"etcd-server1\",
+  \"namespace\": \"kube-system\",
+  \"annotations\": {
+    \"scheduler.alpha.kubernetes.io/critical-pod\": \"\"
+  }
+},
+\"spec\":{
+\"hostNetwork\": true,
+\"containers\":[
+    {
+    \"name\": \"etcd-container\",
+    \"image\": \"${HYPERKUBE_IMAGE}\",
+    \"resources\": {
+      \"requests\": {
+        \"cpu\": \"200m\"
+      }
+    },
+    \"command\": [
+              \"/bin/sh\",
+              \"-c\",
+              \"if [ -e /usr/local/bin/migrate-if-needed.sh ]; then /usr/local/bin/migrate-if-needed.sh 1>>/var/log/etcd1.log 2>&1; fi; /usr/local/bin/etcd --name etcd-1 --listen-peer-urls http://0.0.0.0:2380 --initial-advertise-peer-urls http://192.168.205.10:2380 --advertise-client-urls http://127.0.0.1:2379 --listen-client-urls http://127.0.0.1:2379 --data-dir /var/etcd/data1 --initial-cluster-state new --initial-cluster etcd-1=http://192.168.205.10:2380 1>>/var/log/etcd1.log 2>&1\"
+            ],
+    \"env\": [
+      { \"name\": \"TARGET_STORAGE\",
+        \"value\": \"etcd3\"
+      },
+      { \"name\": \"TARGET_VERSION\",
+        \"value\": \"3.0.17\"
+      },
+      { \"name\": \"DATA_DIRECTORY\",
+        \"value\": \"/var/etcd/data1\"
+      }
+        ],
+    \"livenessProbe\": {
+      \"httpGet\": {
+        \"host\": \"127.0.0.1\",
+        \"port\": 2379,
+        \"path\": \"/health\"
+      },
+      \"initialDelaySeconds\": 15,
+      \"timeoutSeconds\": 15
+    },
+    \"ports\": [
+      { \"name\": \"serverport\",
+        \"containerPort\": 2380,
+        \"hostPort\": 2380
+      },
+      { \"name\": \"clientport\",
+        \"containerPort\": 2379,
+        \"hostPort\": 2379
+      }
+    ],
+    \"volumeMounts\": [
+      { \"name\": \"varetcd\",
+        \"mountPath\": \"/var/etcd\",
+        \"readOnly\": false
+      },
+      { \"name\": \"varlogetcd\",
+        \"mountPath\": \"/var/log/etcd1.log\",
+        \"readOnly\": false
+      },
+      { \"name\": \"etc\",
+        \"mountPath\": \"/srv/kubernetes\",
+        \"readOnly\": false
+      }
+    ]
+    }
+],
+\"volumes\":[
+  { \"name\": \"varetcd\",
+    \"hostPath\": {
+        \"path\": \"/mnt/master-pd/var/etcd\"}
+  },
+  { \"name\": \"varlogetcd\",
+    \"hostPath\": {
+        \"path\": \"/var/log/etcd1.log\"}
+  },
+  { \"name\": \"etc\",
+    \"hostPath\": {
+        \"path\": \"/etc/kubernetes\"}
+  }
+]
+}}" | sudo tee -a /etc/kubernetes/manifests/etcd.manifest
 
-10. Configure kubectl (on master node)
+
+  > echo "{
+  \"kind\": \"Pod\",
+  \"apiVersion\": \"v1\",
+  \"metadata\": {
+    \"name\": \"kube-apiserver\",
+    \"namespace\": \"kube-system\"
+  },
+  \"spec\": {
+    \"hostNetwork\": true,
+    \"containers\": [
+      {
+        \"name\": \"kube-apiserver\",
+        \"image\": \"${HYPERKUBE_IMAGE}\",
+        \"command\": [
+                  \"/hyperkube\",
+                  \"apiserver\",
+                  \"--insecure-bind-address=127.0.0.1\",
+                  \"--service-cluster-ip-range=10.0.0.0/16\",
+                  \"--etcd-servers=http://127.0.0.1:2379\",
+                  \"--tls-cert-file=/srv/kubernetes/apiserver.pem\",
+                  \"--tls-private-key-file=/srv/kubernetes/apiserver.key\",
+                  \"--admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,DefaultStorageClass,ResourceQuota,DefaultTolerationSeconds\"
+        ],
+        \"ports\": [
+          {
+            \"name\": \"https\",
+            \"hostPort\": 443,
+            \"containerPort\": 443
+          },
+          {
+            \"name\": \"local\",
+            \"hostPort\": 8080,
+            \"containerPort\": 8080
+          }
+        ],
+        \"volumeMounts\": [
+          {
+            \"name\": \"srvkube\",
+            \"mountPath\": \"/srv/kubernetes\",
+            \"readOnly\": true
+          }
+        ],
+        \"livenessProbe\": {
+          \"httpGet\": {
+            \"scheme\": \"HTTP\",
+            \"host\": \"127.0.0.1\",
+            \"port\": 8080,
+            \"path\": \"/healthz\"
+          },
+          \"initialDelaySeconds\": 15,
+          \"timeoutSeconds\": 15
+        }
+      }
+    ],
+    \"volumes\": [
+      {
+        \"name\": \"srvkube\",
+        \"hostPath\": {
+          \"path\": \"/etc/kubernetes/pki\"
+        }
+      }
+    ]
+  }
+}" | sudo tee -a /etc/kubernetes/manifests/kube-apiserver.manifest
+
+
+  > echo "{
+  \"kind\": \"Pod\",
+  \"apiVersion\": \"v1\",
+  \"metadata\": {
+    \"name\": \"kube-scheduler\",
+    \"namespace\": \"kube-system\"
+  },
+  \"spec\": {
+    \"hostNetwork\": true,
+    \"containers\": [
+      {
+        \"name\": \"kube-scheduler\",
+        \"image\": \"${HYPERKUBE_IMAGE}\",
+        \"command\": [
+          \"/hyperkube\",
+          \"scheduler\",
+          \"--master=127.0.0.1:8080\"
+        ],
+        \"livenessProbe\": {
+          \"httpGet\": {
+            \"scheme\": \"HTTP\",
+            \"host\": \"127.0.0.1\",
+            \"port\": 10251,
+            \"path\": \"/healthz\"
+          },
+          \"initialDelaySeconds\": 15,
+          \"timeoutSeconds\": 15
+        }
+      }
+    ]
+  }
+}" | sudo tee -a /etc/kubernetes/manifests/kube-scheduler.manifest
+
+
+  > echo "{
+  \"kind\": \"Pod\",
+  \"apiVersion\": \"v1\",
+  \"metadata\": {
+    \"name\": \"kube-controller-manager\",
+    \"namespace\": \"kube-system\"
+  },
+  \"spec\": {
+    \"hostNetwork\": true,
+    \"containers\": [
+      {
+        \"name\": \"kube-controller-manager\",
+        \"image\": \"$HYPERKUBE_IMAGE\",
+        \"command\": [
+          \"/hyperkube\",
+          \"controller-manager\",
+          \"--cluster-name=k8s-sdchoi\",
+          \"--cluster-cidr=10.244.0.0/16\",
+          \"--cluster-signing-cert-file=/srv/kubernetes/ca.pem\",
+          \"--cluster-signing-key-file=/srv/kubernetes/ca.key\",
+          \"--service-account-private-key-file=/srv/kubernetes/apiserver.key\",
+          \"--root-ca-file=/srv/kubernetes/apiserver.pem\",
+          \"--master=127.0.0.1:8080\"
+        ],
+        \"volumeMounts\": [
+          {
+            \"name\": \"srvkube\",
+            \"mountPath\": \"/srv/kubernetes\",
+            \"readOnly\": true
+          },
+          {
+            \"name\": \"etcssl\",
+            \"mountPath\": \"/etc/ssl\",
+            \"readOnly\": true
+          }
+        ],
+        \"livenessProbe\": {
+          \"httpGet\": {
+            \"scheme\": \"HTTP\",
+            \"host\": \"127.0.0.1\",
+            \"port\": 10252,
+            \"path\": \"/healthz\"
+          },
+          \"initialDelaySeconds\": 15,
+          \"timeoutSeconds\": 15
+        }
+      }
+    ],
+    \"volumes\": [
+      {
+        \"name\": \"srvkube\",
+        \"hostPath\": {
+          \"path\": \"/etc/kubernetes/pki\"
+        }
+      },
+      {
+        \"name\": \"etcssl\",
+        \"hostPath\": {
+          \"path\": \"/etc/ssl\"
+        }
+      }
+    ]
+  }
+}"  | sudo tee -a /etc/kubernetes/manifests/kube-controller-manager.manifest
+
+
+8. Configure kubectl (on master node)
   > chmod +x kubectl; sudo chown root:root kubectl
   > sudo mv kubectl /usr/local/bin
+  > export KUBECONFIG=/etc/kubernetes/config
+  > kubectl get nodes
 
-11. Deploy kube-dns
+9. Deploy kube-dns
   > for item in Makefile kubedns-controller.yaml.base kubedns-svc.yaml.base transforms2salt.sed transforms2sed.sed; do
     wget https://raw.githubusercontent.com/kubernetes/kubernetes/master/cluster/addons/dns/$item
 done
