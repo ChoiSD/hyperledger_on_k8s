@@ -10,3 +10,13 @@ Before starting, I considered of following things:
 
 So I divided this guide into few steps. One for peer Organization, and one for orderer Organization.
 ~~Leave multiple organizations for Orderer behind at this time~~
+
+## Things to do
+
+- Enroll with bootstrap user and make it as a secret
+
+- Register peers' identity
+
+- Enroll with peer's identity and get certificates in a persistent volume
+
+- Deploy peers as a StatefulSet
