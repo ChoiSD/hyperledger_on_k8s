@@ -1,8 +1,9 @@
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: ca
-  namespace: hyperledger
+  namespace: org1
   labels:
     app: hyperledger-fabric
     component: ca
@@ -12,3 +13,31 @@ spec:
   selector:
     app: hyperledger-fabric
     component: ca
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: peer-org-ca
+  namespace: org1
+  labels:
+    app: hyperledger-fabric
+    component: ca
+    release: 1.4.1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hyperledger-fabric
+      component: ca
+  template:
+    metadata:
+      labels:
+        app: hyperledger-fabric
+        component: ca
+    spec:
+      containers:
+      - name: ca
+        image: hyperledger/fabric-ca:1.4.1
+        command: ["sh", "-c"]
+        args:
+        - fabric-ca-server start -b admin:adminpw

@@ -1,0 +1,149 @@
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: hyperledger-admin
+  namespace: org1
+rules:
+- apiGroups: [""]
+  resources:
+  - secrets
+  verbs:
+  - create
+  - list
+  - patch
+  - replace
+  - delete
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: hyperledger-admin
+  namespace: org1
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: hyperledger-admin
+  namespace: org1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hyperledger-admin
+subjects:
+- kind: ServiceAccount
+  name: hyperledger-admin
+  namespace: org1
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: admin-script
+  namespace: org1
+data:
+  init.sh: |
+    #!/bin/sh
+    # import util
+    . util.sh
+    installPkgs
+  register.sh: |
+    #!/bin/sh
+    # import util
+    . util.sh
+    installPkgs
+  enroll.sh: |
+    #!/bin/sh
+    CA_ENDPOINT=$1
+    SUBJECT=$2
+    USER=$3
+    PASSWORD=$4
+    DEST_PATH=$5
+    . util.sh
+    installPkgs
+    waitUntilSvcUp $CA_ENDPOINT
+    genCSR $SUBJECT
+    getMSPData $CA_ENDPOINT $USER $PASSWORD $DEST_PATH
+  util.sh: |
+    #!/bin/sh
+    installPkgs() {
+      apk add --no-cache curl openssl jq
+    }
+    waitUntilSvcUp() {
+      CA_ENDPOINT=$1
+      until curl $CA_ENDPOINT 2>&1 > /dev/null
+      do
+        echo "Fabric CA server(${CA_ENDPOINT}) not ready"
+        sleep 5
+      done
+    }
+    genCSR() {
+      SUBJECT=$1
+      openssl ecparam -name prime256v1 -genkey -noout -out my.key
+    cat > openssl.cnf <<EOF
+    [ req ]
+    default_bits        = 256
+    default_md          = sha256
+    default_keyfile     = private.key
+    distinguished_name  = req_distinguished_name
+
+    [ req_distinguished_name ]
+    countryName         = KR
+    EOF
+
+      openssl req -new -sha256 -key my.key -out my.csr -config ./openssl.cnf -subj $SUBJECT
+    }
+    getMSPData() {
+      CA_ENDPOINT=$1
+      USER=$2
+      PASSWORD=$3
+      DEST_PATH=$4
+      CSR=$(cat my.csr | tr '\n' '_' | sed 's/\_/\\n/g')
+      curl -o msp.out -X POST --user $USER:$PASSWORD -H "Content-Type: application/json" -H "Accept: application/json" $CA_ENDPOINT/api/v1/enroll -d '{"certificate_request":"'${CSR::-2}'"}'
+      mkdir -p $DEST_PATH/msp/admincerts
+      mkdir -p $DEST_PATH/msp/keystore
+      mkdir -p $DEST_PATH/msp/signcerts
+      jq -r '.result.Cert' msp.out | base64 -d > $DEST_PATH/msp/signcerts/cert.pem
+      jq -r '.result.ServerInfo.CAChain' msp.out | base64 -d > $DEST_PATH/msp/cacerts/ca-cert.pem
+      mv my.key $DEST_PATH/msp/keystore/key.pem
+    }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: admin
+  namespace: org1
+  labels:
+    app: hyperledger-fabric
+    component: admin
+    release: 1.4.1
+spec:
+  containers:
+  - name: admin
+    image: alpine:latest
+    command: ['sh','-c']
+    args:
+    - | 
+      WALLET=/tmp/wallet &&
+      mkdir -p $WALLET &&
+      cd /tmp/script &&
+      ./enroll.sh http://ca:7054 "/C=KR/ST=Seoul/L=Gangdong-gu/CN=admin" admin adminpw $WALLET &&
+      KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) &&
+      NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace) &&
+      ADMIN_CERT=$(cat $WALLET/msp/signcerts/cert.pem | base64) &&
+      ADMIN_KEY=$(cat $WALLET/msp/keystore/key.pem | base64) &&
+      curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d '{"metadata":{"name":"admin-cert"},"type":"Opaque","data":{"cert":"${ADMIN_CERT}"}}' https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets &&
+      curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d '{"metadata":{"name":"admin-key"},"type":"Opaque","data":{"cert":"${ADMIN_KEY}"}}' https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets
+    volumeMounts:
+    - name: scripts
+      mountPath: /tmp/script
+  volumes:
+  - name: scripts
+    configMap:
+      name: admin-script
+      items:
+      - key: enroll.sh
+        path: enroll.sh
+        mode: 0755
+      - key: util.sh
+        path: util.sh
+        mode: 0755
