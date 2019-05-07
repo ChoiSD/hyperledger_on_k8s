@@ -1,0 +1,46 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enroll-admin
+  namespace: org1
+spec:
+  template:
+    spec:
+      containers:
+      - name: enroll-admin
+        image: alpine:latest
+        command: ["sh","-c"]
+        args:
+        - |
+          mkdir -p /var/wallet &&
+          cd /var/wallet &&
+          echo "Install required packages" &&
+          apk add --no-cache curl openssl jq &&
+          echo "Get admin's certificate" &&
+          openssl ecparam -name prime256v1 -genkey -noout -out my.key &&
+          cat > openssl.cnf <<EOF
+          [ req ]
+          default_bits        = 256
+          default_md          = sha256
+          default_keyfile     = my.key
+          distinguished_name  = req_dn
+          [ req_dn ]
+          countryName         = KR
+          EOF
+          openssl req -new -sha256 -key my.key -out my.csr -config ./openssl.cnf -subj "/C=KR/ST=Seoul/L=Gangdong-gu/O=org1.com/OU=admin/CN=admin" &&
+          CSR=$(cat my.csr | tr '\n' '_' | sed 's/\_/\\n/g')
+          curl -o cert.out -X POST --user admin:adminpw -H "Content-Type: application/json" http://ca.org1:7054/api/v1/enroll -d '{"certificate_request":"'"${CSR::-2}"'"}' &&
+          jq -r '.result.Cert' cert.out | base64 -d > admin.pem &&
+          jq -r '.result.ServerInfo.IssuerPublicKey' cert.out > IssuerPublicKey
+          jq -r '.result.ServerInfo.IssuerRevocationPublicKey' cert.out > IssuerRevocationPublicKey
+          echo "Register certificates as Secret" 
+          KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) 
+          NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace) 
+          ADMIN_CERT=$(base64 admin.pem | tr -d '\n') 
+          ADMIN_KEY=$(base64 my.key | tr -d '\n') 
+          IPK=$(base64 IssuerPublicKey | tr -d '\n') 
+          IRPK=$(cat IssuerRevocationPublicKey)
+          curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d '{"metadata":{"name":"admin"},"type":"Opaque","data":{"cert":"'"${ADMIN_CERT}"'","key":"'"${ADMIN_KEY}"'","IssuerPublicKey":"'"${IPK}"'","IsserRevocationPublicKey":"'"${IRPK}"'"}}' https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets
+      serviceAccountName: hyperledger-admin
+      restartPolicy: OnFailure
