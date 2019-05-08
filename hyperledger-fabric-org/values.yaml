@@ -47,3 +47,12 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+
+#################################################################
+# Service account 
+#----------------#
+serviceAccount:
+  # Will you create a service account?
+  create: false
+  # 
