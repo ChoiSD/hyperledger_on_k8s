@@ -2,7 +2,7 @@
 kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: hyperledger-admin
+  name: org1-admin
   namespace: org1
 rules:
 - apiGroups: [""]
@@ -18,19 +18,19 @@ rules:
 kind: ServiceAccount
 apiVersion: v1
 metadata:
-  name: hyperledger-admin
+  name: org1-admin
   namespace: org1
 ---
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: hyperledger-admin
+  name: org1-admin
   namespace: org1
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: hyperledger-admin
+  name: org1-admin
 subjects:
 - kind: ServiceAccount
-  name: hyperledger-admin
+  name: org1-admin
   namespace: org1

@@ -1,4 +1,18 @@
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: peer
+  namespace: org1
+  labels:
+    app: hyperledger-fabric
+    component: peer
+spec:
+  clusterIP: None
+  selector:
+    app: hyperledger-fabric
+    component: peer
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -7,15 +21,13 @@ metadata:
   labels:
     app: hyperledger-fabric
     component: peer
-    release: 1.4.1
 spec:
   selector:
     matchLabels:
       app: hyperledger-fabric
       component: peer
-      release: 1.4.1
-  serviceName: "org1"
-  replicas: 1
+  serviceName: "peer"
+  replicas: 2
   template:
     metadata:
       labels:
@@ -30,10 +42,16 @@ spec:
         args:
         - |
           if [ ! -d /hyperledger/msp ]; then
-            fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:peerpw@ca.org1:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=org1.com
+            echo "Register peer: ${HOSTNAME}"
+            fabric-ca-client register -M /var/admin/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type peer --id.maxenrollments 1 --id.secret peerpw || exit 1
+            echo "Get MSP certificates: ${HOSTNAME}"
+            fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:peerpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=org1.com || exit 1
             mkdir /hyperledger/msp/admincerts
-            cp /var/admin/admin.pem /hyperledger/msp/admincerts/
+            cp /var/admin/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
           fi
+        env:
+        - name: FABRIC_CA_SERVER
+          value: ca.org1
         volumeMounts:
         - name: peer-data
           mountPath: /hyperledger
@@ -46,8 +64,9 @@ spec:
         args: 
         - |
           export CORE_PEER_ID=${HOSTNAME};
-          export CORE_PEER_ADDRESS=${HOSTNAME}:7051;
-          export CORE_PEER_GOSSIP_EXTERNALENDPOINT=${HOSTNAME}:7051;
+          export CORE_PEER_ADDRESS=${HOSTNAME}.peer.org1:7051;
+          export CORE_PEER_GOSSIP_EXTERNALENDPOINT=${HOSTNAME}.peer.org1:7051;
+          sleep 30
           peer node start
         env:
         - name: CORE_PEER_GOSSIP_USELEADERELECTION
@@ -55,13 +74,15 @@ spec:
         - name: CORE_PEER_GOSSIP_ORGLEADER
           value: "false"
         - name: CORE_PEER_GOSSIP_BOOTSTRAP
-          value: peer-0:7051
+          value: peer-0.peer.org1:7051
         - name: CORE_PEER_LOCALMSPID
           value: Org1MSP
         - name: CORE_PEER_MSPCONFIGPATH
-          value: /hyperledger/msp
+          value: /var/hyperledger/msp
         - name: CORE_PEER_TLS_ENABLED
           value: "false"
+        - name: CORE_PEER_FILESYSTEMPATH
+          value: /var/hyperledger/production
         - name: CORE_VM_ENDPOINT
           value: unix:///host/var/run/docker.sock
         ports:
@@ -73,7 +94,7 @@ spec:
         - name: docker-sock
           mountPath: /host/var/docker.sock
         - name: peer-data
-          mountPath: /hyperledger
+          mountPath: /var/hyperledger
       volumes:
       - name: docker-sock
         hostPath:
@@ -83,7 +104,22 @@ spec:
           secretName: admin
           items:
           - key: cert
-            path: admin.pem
+            path: msp/signcerts/cert.pem
+            mode: 0644
+          - key: key
+            path: msp/keystore/private.key
+            mode: 0600
+          - key: CA
+            path: msp/cacerts/ca.pem
+            mode: 0644
+          - key: user
+            path: msp/user/empty
+          - key: IssuerRevocationPublicKey
+            path: msp/IssuerRevocationPublicKey
+            mode: 0644
+          - key: IssuerPublicKey
+            path: msp/IssuerPublicKey
+            mode: 0644
   volumeClaimTemplates:
   - metadata:
       name: peer-data

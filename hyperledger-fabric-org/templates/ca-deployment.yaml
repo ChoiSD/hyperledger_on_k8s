@@ -29,11 +29,13 @@ spec:
     matchLabels:
       app: hyperledger-fabric
       component: ca
+      release: 1.4.1
   template:
     metadata:
       labels:
         app: hyperledger-fabric
         component: ca
+        release: 1.4.1
     spec:
       containers:
       - name: ca
