@@ -1,0 +1,65 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orderer
+  namespace: orderer
+  labels:
+    app: hyperledger-fabric
+    component: orderer
+spec:
+  ports:
+  - port: 7050
+  selector:
+    app: hyperledger-fabric
+    component: orderer
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: orderer
+  namespace: orderer
+  labels:
+    app: hyperledger-fabric
+    component: orderer
+spec:
+  replicas: 1
+  selector:
+    matchLables:
+      app: hyperledger-fabric
+      component: orderer
+  template:
+    metadata:
+      labels:
+        app: hyperledger-fabric
+        component: orderer
+        releases: 1.4.1
+    spec:
+      initContainers:
+      - name: init-orderer
+        image: hyperledger/fabric-ca:1.4.1
+        command: ['sh', '-c']
+        args:
+        - |
+          if [ ! -d /hyperledger/msp ]; then
+            echo "Register orderer: ${HOSTNAME}"
+            fabric-ca-client register -M /var/admin/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type orderer --id.maxenrollments 1 --id.secret peerpw || exit 1
+            echo "Get MSP certificates: ${HOSTNAME}"
+            fabric-ca-client enroll -H /hyperledger -u http://
+          fi
+        env:
+        - name: FABRIC_CA_SERVER
+          value: ca.orderer
+      containers:
+      - name: orderer
+        image: hyperledger/fabric-orderer:1.4.1
+        command: ["sh","-c"]
+        args:
+        - fabric-ca-server start -b admin:adminpw
+        ports:
+        - containerPort: 7054
+        readinessProbe:
+          tcpSocket:
+            port: 7054
+          initialDelaySeconds: 10
+          periodSeconds: 20

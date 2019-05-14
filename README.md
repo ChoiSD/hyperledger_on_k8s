@@ -13,10 +13,12 @@ So I divided this guide into few steps. One for peer Organization, and one for o
 
 ## Things to do
 
-- Enroll with bootstrap user and make it as a secret
+- ~~Enroll with bootstrap user and make it as a secret~~
 
-- Register peers' identity
+- ~~Register peers' identity~~
 
-- Enroll with peer's identity and get certificates in a persistent volume
+- ~~Enroll with peer's identity and get certificates in a persistent volume~~
 
-- Deploy peers as a StatefulSet
+- ~~Deploy peers as a StatefulSet~~
+
+- Make for Orderer Org
