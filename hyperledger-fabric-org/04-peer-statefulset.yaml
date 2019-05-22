@@ -13,6 +13,37 @@ spec:
     app: hyperledger-fabric
     component: peer
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: peer-env
+  namespace: org1
+data:
+  CORE_PEER_GOSSIP_BOOTSTRAP: "peer-0.peer.org1:7051"
+  CORE_PEER_GOSSIP_ORGLEADER: "false"
+  CORE_PEER_GOSSIP_USELEADERELECTION: "true"
+  CORE_PEER_LOCALMSPID: Org1MSP
+  CORE_PEER_MSPCONFIGPATH: "/root/msp"
+  CORE_VM_ENDPOINT: "unix:///host/var/run/docker.sock"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scripts
+  namespace: org1
+data:
+  mk-msp.sh: |
+    #!/bin/sh
+    SRC_PATH=$1
+    SRC_KEY_PATH=$2
+    echo "##### Create MSP directory #####"
+    mkdir -p /root/msp/signcerts /root/msp/keystore /root/msp/cacerts /root/msp/user
+    cp ${SRC_PATH}/admincert /root/msp/signcerts/cert.pem
+    cp ${SRC_PATH}/cacert /root/msp/cacerts/ca.pem
+    cp ${SRC_PATH}/IssuerPublicKey /root/msp/IssuerPublicKey
+    cp ${SRC_PATH}/IssuerRevocationPublicKey /root/msp/IssuerRevocationPublicKey
+    cp ${SRC_KEY_PATH} /root/msp/keystore/private.key
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -22,18 +53,18 @@ metadata:
     app: hyperledger-fabric
     component: peer
 spec:
+  replicas: 2
   selector:
     matchLabels:
       app: hyperledger-fabric
       component: peer
   serviceName: "peer"
-  replicas: 2
   template:
     metadata:
       labels:
         app: hyperledger-fabric
         component: peer
-        release: 1.4.1
+        version: 1.4.1
     spec:
       initContainers:
       - name: init-peer
@@ -42,9 +73,10 @@ spec:
         args:
         - |
           if [ ! -d /hyperledger/msp ]; then
-            echo "Register peer: ${HOSTNAME}"
-            fabric-ca-client register -M /var/admin/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type peer --id.maxenrollments 1 --id.secret peerpw || exit 1
-            echo "Get MSP certificates: ${HOSTNAME}"
+            /scripts/mk-msp.sh /var/msp /var/admin-key/key
+            echo "##### Register peer: ${HOSTNAME} #####"
+            fabric-ca-client register -M /root/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type peer --id.maxenrollments 1 --id.secret peerpw || exit 1
+            echo "##### Get MSP certificates: ${HOSTNAME} #####"
             fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:peerpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=org1.com || exit 1
             mkdir /hyperledger/msp/admincerts
             cp /var/admin/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
@@ -55,8 +87,12 @@ spec:
         volumeMounts:
         - name: peer-data
           mountPath: /hyperledger
-        - name: admin-cert
-          mountPath: /var/admin
+        - name: msp
+          mountPath: /var/msp
+        - name: admin-key
+          mountPath: /var/admin-key
+        - name: scripts
+          mountPath: /scripts
       containers:
       - name: peer
         image: hyperledger/fabric-peer:1.4.1
@@ -68,23 +104,9 @@ spec:
           export CORE_PEER_GOSSIP_EXTERNALENDPOINT=${HOSTNAME}.peer.org1:7051;
           sleep 30
           peer node start
-        env:
-        - name: CORE_PEER_GOSSIP_USELEADERELECTION
-          value: "true"
-        - name: CORE_PEER_GOSSIP_ORGLEADER
-          value: "false"
-        - name: CORE_PEER_GOSSIP_BOOTSTRAP
-          value: peer-0.peer.org1:7051
-        - name: CORE_PEER_LOCALMSPID
-          value: Org1MSP
-        - name: CORE_PEER_MSPCONFIGPATH
-          value: /var/hyperledger/msp
-        - name: CORE_PEER_TLS_ENABLED
-          value: "false"
-        - name: CORE_PEER_FILESYSTEMPATH
-          value: /var/hyperledger/production
-        - name: CORE_VM_ENDPOINT
-          value: unix:///host/var/run/docker.sock
+        envFrom:
+        - configMapRef:
+            name: peer-env
         ports:
         - name: interface
           containerPort: 7051
@@ -99,27 +121,17 @@ spec:
       - name: docker-sock
         hostPath:
           path: /var/run/docker.sock
-      - name: admin-cert
+      - name: msp
         secret:
-          secretName: admin
-          items:
-          - key: cert
-            path: msp/signcerts/cert.pem
-            mode: 0644
-          - key: key
-            path: msp/keystore/private.key
-            mode: 0600
-          - key: CA
-            path: msp/cacerts/ca.pem
-            mode: 0644
-          - key: user
-            path: msp/user/empty
-          - key: IssuerRevocationPublicKey
-            path: msp/IssuerRevocationPublicKey
-            mode: 0644
-          - key: IssuerPublicKey
-            path: msp/IssuerPublicKey
-            mode: 0644
+          secretName: msp
+      - name: admin-key
+        secret:
+          secretName: admin-key
+          defaultMode: 0600
+      - name: scripts
+        configMap:
+          name: scripts
+          defaultMode: 0744
   volumeClaimTemplates:
   - metadata:
       name: peer-data

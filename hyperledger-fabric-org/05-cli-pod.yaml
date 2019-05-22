@@ -1,0 +1,49 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cli
+  namespace: org1
+  labels:
+    app: hyperledger-fabric
+    component: cli
+    version: 1.4.1
+spec:
+  containers:
+  - name: cli
+    image: hyperledger/fabric-tools:1.4.1
+    command: ["sh","-c"]
+    args:
+    - |
+      /scripts/mk-msp.sh /var/msp /var/admin-key/key
+      sleep 10000
+    env:
+    - name: CORE_PEER_ID
+      value: cli
+    - name: FABRIC_LOGGING_SPEC
+      value: INFO
+    - name: CORE_PEER_ADDRESS
+      value: peer-0.peer.org1:7051
+    - name: CORE_PEER_LOCALMSPID
+      value: Org1
+    - name: CORE_PEER_MSPCONFIGPATH
+      value: /root/msp
+    volumeMounts:
+    - name: msp
+      mountPath: /var/msp
+    - name: admin-key
+      mountPath: /var/admin-key
+    - name: scripts
+      mountPath: /scripts
+  volumes:
+  - name: msp
+    secret:
+      secretName: msp
+  - name: admin-key
+    secret:
+      secretName: admin-key
+      defaultMode: 0600
+  - name: scripts
+    configMap:
+      name: scripts
+      defaultMode: 0744

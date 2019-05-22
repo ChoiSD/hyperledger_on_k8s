@@ -8,11 +8,23 @@ metadata:
     app: hyperledger-fabric
     component: orderer
 spec:
-  ports:
-  - port: 7050
+  clusterIP: None
   selector:
     app: hyperledger-fabric
     component: orderer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orderer-env
+  namespace: orderer
+data:
+  FABRIC_LOGGING_SPEC: INFO
+  ORDERER_GENERAL_LISTENADDRESS: 0.0.0.0
+  ORDERER_GENERAL_GENESISMETHOD: file
+  ORDERER_GENERAL_GENESISFILE: /etc/hyperledger/fabric/genesis/genesis.block
+  ORDERER_GENERAL_LOCALMSPID: Orderer
+  ORDERER_GENERAL_LOCALMSPDIR: /var/hyperledger/msp
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -25,9 +37,10 @@ metadata:
 spec:
   replicas: 1
   selector:
-    matchLables:
+    matchLabels:
       app: hyperledger-fabric
       component: orderer
+  serviceName: "orderer"
   template:
     metadata:
       labels:
@@ -45,21 +58,68 @@ spec:
             echo "Register orderer: ${HOSTNAME}"
             fabric-ca-client register -M /var/admin/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type orderer --id.maxenrollments 1 --id.secret peerpw || exit 1
             echo "Get MSP certificates: ${HOSTNAME}"
-            fabric-ca-client enroll -H /hyperledger -u http://
+            fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:peerpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=orderer.com || exit 1
+            mkdir /hyperledger/msp/admincerts
+            cp /var/admin/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
           fi
         env:
         - name: FABRIC_CA_SERVER
           value: ca.orderer
+        volumeMounts:
+        - name: orderer-data
+          mountPath: /hyperledger
+        - name: admin-cert
+          mountPath: /var/admin
       containers:
       - name: orderer
         image: hyperledger/fabric-orderer:1.4.1
-        command: ["sh","-c"]
-        args:
-        - fabric-ca-server start -b admin:adminpw
+        command: ["orderer"]
         ports:
-        - containerPort: 7054
+        - containerPort: 7050
+        envFrom:
+        - configMapRef:
+            name: orderer-env
+        volumeMounts:
+        - name: orderer-data
+          mountPath: /var/hyperledger
+        - name: genesis-block
+          mountPath: /etc/hyperledger/fabric/genesis
         readinessProbe:
           tcpSocket:
-            port: 7054
+            port: 7050
           initialDelaySeconds: 10
           periodSeconds: 20
+      volumes:
+      - name: admin-cert
+        secret:
+          secretName: admin
+          items:
+          - key: cert
+            path: msp/signcerts/cert.pem
+            mode: 0644
+          - key: key
+            path: msp/keystore/private.key
+            mode: 0600
+          - key: CA
+            path: msp/cacerts/ca.pem
+            mode: 0644
+          - key: user
+            path: msp/user/empty
+          - key: IssuerRevocationPublicKey
+            path: msp/IssuerRevocationPublicKey
+            mode: 0644
+          - key: IssuerPublicKey
+            path: msp/IssuerPublicKey
+            mode: 0644
+      - name: genesis-block
+        secret:
+          secretName: genesis
+  volumeClaimTemplates:
+  - metadata:
+      name: orderer-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local
+      resources:
+        requests:
+          storage: 5Gi

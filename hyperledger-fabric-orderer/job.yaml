@@ -46,12 +46,13 @@ spec:
           IPK=$(jq -r '.result.ServerInfo.IssuerPublicKey' cert.out | base64 | tr -d '\n')
           IRPK=$(jq -r '.result.ServerInfo.IssuerRevocationPublicKey' cert.out)
           SECRET=$(echo '{"metadata":{"name":"admin"},"type":"Opaque"}' | \
-              jq -r --arg a ${ADMIN_CERT} --arg b ${ADMIN_KEY} --arg c ${CA_CERT} --arg d ${IPK} --arg e ${IRPK} \
-                  '.data.cert = $a | .data.key = $b | .data.CA = $c | .data.IssuerPublicKey = $d | .data.IssuerRevocationPublicKey = $e | .data.user = ""')
+              jq -r --arg a ${ADMIN_CERT} --arg b ${CA_CERT} --arg c ${IPK} --arg d ${IRPK} \
+                  '.data.cert = $a | .data.CA = $b | .data.IssuerPublicKey = $c | .data.IssuerRevocationPublicKey = $d | .data.user = ""')
           echo "Register certificates as Secret" 
           KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) 
           NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace) 
-          curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d ${SECRET} https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets || exit 1
+          curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d "${SECRET}" https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets || exit 1
+          SECRET=$(echo '{"metadata":{"name":"admin-key"}')
         env:
         - name: FABRIC_CA_SERVER
           value: ca.orderer
