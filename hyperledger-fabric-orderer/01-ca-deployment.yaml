@@ -22,20 +22,18 @@ metadata:
   labels:
     app: hyperledger-fabric
     component: ca
-    release: 1.4.1
 spec:
   replicas: 1
   selector:
     matchLabels:
       app: hyperledger-fabric
       component: ca
-      releases: 1.4.1
   template:
     metadata:
       labels:
         app: hyperledger-fabric
         component: ca
-        releases: 1.4.1
+        version: 1.4.1
     spec:
       containers:
       - name: ca
@@ -48,5 +46,10 @@ spec:
         readinessProbe:
           tcpSocket:
             port: 7054
-          initialDelaySeconds: 10
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 7054
+          initialDelaySeconds: 15
           periodSeconds: 20

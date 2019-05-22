@@ -16,6 +16,7 @@ spec:
     args:
     - |
       /scripts/mk-msp.sh /var/msp /var/admin-key/key
+      export CORE_PEER_MSPCONFIGPATH=/root/msp
       sleep 10000
     env:
     - name: CORE_PEER_ID
@@ -24,10 +25,11 @@ spec:
       value: INFO
     - name: CORE_PEER_ADDRESS
       value: peer-0.peer.org1:7051
-    - name: CORE_PEER_LOCALMSPID
-      value: Org1
     - name: CORE_PEER_MSPCONFIGPATH
       value: /root/msp
+    envFrom:
+    - configMapRef:
+        name: peer-env
     volumeMounts:
     - name: msp
       mountPath: /var/msp

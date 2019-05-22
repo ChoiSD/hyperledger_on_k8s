@@ -2,7 +2,7 @@
 kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: orderer-admin
+  name: secret-edit
   namespace: orderer
 rules:
 - apiGroups: [""]
@@ -10,27 +10,24 @@ rules:
   - secrets
   verbs:
   - create
-  - list
-  - patch
-  - replace
-  - delete
+  - read
 ---
 kind: ServiceAccount
 apiVersion: v1
 metadata:
-  name: orderer-admin
+  name: admin
   namespace: orderer
 ---
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: orderer-admin
+  name: admin
   namespace: orderer
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: orderer-admin
+  name: secret-edit
 subjects:
 - kind: ServiceAccount
-  name: orderer-admin
+  name: admin
   namespace: orderer

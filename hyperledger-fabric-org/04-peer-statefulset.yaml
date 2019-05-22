@@ -23,7 +23,7 @@ data:
   CORE_PEER_GOSSIP_ORGLEADER: "false"
   CORE_PEER_GOSSIP_USELEADERELECTION: "true"
   CORE_PEER_LOCALMSPID: Org1MSP
-  CORE_PEER_MSPCONFIGPATH: "/root/msp"
+  CORE_PEER_MSPCONFIGPATH: "/var/hyperledger/msp"
   CORE_VM_ENDPOINT: "unix:///host/var/run/docker.sock"
 ---
 apiVersion: v1
@@ -79,7 +79,7 @@ spec:
             echo "##### Get MSP certificates: ${HOSTNAME} #####"
             fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:peerpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=org1.com || exit 1
             mkdir /hyperledger/msp/admincerts
-            cp /var/admin/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
+            cp /root/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
           fi
         env:
         - name: FABRIC_CA_SERVER
