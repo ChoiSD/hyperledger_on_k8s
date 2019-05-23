@@ -1,4 +1,110 @@
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configtx
+  namespace: default
+data:
+  configtx.yaml: |
+    Organizations:
+    - &Org1
+      Name: Org1
+      ID: Org1MSP
+      MSPDir: org1
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('Org1.member')"
+        Writers:
+          Type: Signature
+          Rule: "OR('Org1.member')"
+        Admins:
+          Type: Signature
+          Rule: "OR('Org1.admin')"
+      AnchorPeers:
+      - Host: peer-0.peer.org1
+        Port: 7051
+    - &Org2
+      Name: Org2
+      ID: Org2MSP
+      MSPDir: org2
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('Org2.member')"
+        Writers:
+          Type: Signature
+          Rule: "OR('Org2.member')"
+        Admins:
+          Type: Signature
+          Rule: "OR('Org2.admin')"
+      AnchorPeers:
+      - Host: peer-0.peer.org2
+        Port: 7051
+    - &Orderer
+      Name: Orderer
+      ID: OrdererMSP
+      MSPDir: orderer
+      Policies:
+        Readers:
+          Type: Signature
+          Rule: "OR('Orderer.member')"
+        Writers:
+          Type: Signature
+          Rule: "OR('Orderer.member')"
+        Admins:
+          Type: Signature
+          Rule: "OR('Orderer.member')"
+    Orderer: &OrdererDefaults
+      OrdererType: solo
+      Addresses:
+      - orderer-0.orderer.orderer:7050
+      BatchTimeout: 2s
+      BatchSize:
+        MaxMessageCount: 10
+        AbsoluteMaxBytes: 99 MB
+        PreferredMaxBytes: 512 KB
+      Kafka:
+      Organizations:
+      Policies:
+        Readers:
+          Type: ImplicitMeta
+          Rule: "ANY Readers"
+        Writers:
+          Type: ImplicitMeta
+          Rule: "ANY Writers"
+        Admins:
+          Type: ImplicitMeta
+          Rule: "ALL Admins"
+        BlockValidation:
+          Type: ImplicitMeta
+          Rule: "ANY Writers"
+    Profiles:
+      GenesisProfile:
+        Policies:
+          Readers:
+            Type: ImplicitMeta
+            Rule: "ANY Readers"
+          Writers:
+            Type: ImplicitMeta
+            Rule: "ANY Writers"
+          Admins:
+            Type: ImplicitMeta
+            Rule: "ALL Admins"
+        Capabilities:
+          V1_3: true
+        Orderer:
+          <<: *OrdererDefaults
+          Organizations:
+          - *Orderer
+          Capabilities:
+            V1_1: true
+        Consortiums:
+          SampleConsortium:
+            Organizations:
+            - *Org1
+            - *Org2
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -12,7 +118,7 @@ spec:
     spec:
       containers:
       - name: generate-genesis
-        image: alpine:latest
+        image: hyperledger/fabric-tools:1.4.1
         command: ["sh","-c"]
         args:
         - |
@@ -23,51 +129,48 @@ spec:
           # Generate genesis.block
           # Save genesis.block to Secret
 
-          echo "##### 1. Start - Install required packages #####"
-          apk add --no-cache curl jq > /dev/null || exit 1
-          echo "##### 1. Finish - Install required packages #####"
-          
+          KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) 
           for ORG in org1 org2 orderer
           do
-            echo "##### 2. Start - Get ${ORG}'s MSP data #####"
-            KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) 
-            curl -o ${ORG}.json --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${ORG}/secrets/msp || exit 1
-            echo "##### 2. Finish - Generate bootstrap user's key pair #####"
+            echo "##### 1. Start - Get ${ORG}'s MSP data #####"
+            curl -o ${ORG}.json \
+              --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+              -H "Authorization: Bearer $KUBE_TOKEN" \
+              https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${ORG}/secrets/msp || exit 1
+            mkdir -p /root/${ORG}/admincerts /root/${ORG}/cacerts
+            jq -r '.data.admincert' > /root/${ORG}/admincerts/admin.pem
+            jq -r '.data.cacert' > /root/${ORG}/cacerts/ca.pem
+            echo "##### 1. Finish - Get ${ORG}'s MSP data #####"
           done
 
-          echo "##### 3. Start - Make bootstrap user's CSR #####"
-          openssl req -new -sha256 -key my.key -out my.csr -config ./openssl.cnf -subj "/C=KR/ST=Seoul/L=Gangdong-gu/O=org1.com/OU=admin/CN=admin"
-          CSR=$(cat my.csr | tr '\n' '_' | sed 's/\_/\\n/g')
-          until nslookup ${FABRIC_CA_SERVER} > /dev/null
-          do
-            echo "Failed to resolve CA server: ${FABRIC_CA_SERVER}"
-            sleep 30
-          done
-          echo "##### 3. Finish - Make bootstrap user's CSR #####"
+          echo "##### 2. Start - Generate genesis.block #####"
+          wget -O /root/install.sh ${BINARY_URL} || exit 1
+          cd /root
+          bash ./install.sh -d -s || exit 1
+          /root/bin/configtxgen -configPath $PWD -profile GenesisProfile -channelID syschannel -outputBlock genesis.block
+          echo "##### 2. Finish - Generate genesis.block #####"
 
-          echo "##### 4. Start - Get bootstrap user's certificate #####"
-          curl -o cert.out -X POST --user admin:adminpw -H "Content-Type: application/json" http://${FABRIC_CA_SERVER}:7054/api/v1/enroll -d '{"certificate_request":"'"${CSR::-2}"'"}' || exit 1
-          echo "##### 4. Finish - Get bootstrap user's certificate #####"
-
-          echo "##### 5. Start - Save bootstrap user's MSP data into secret #####"
-          ADMIN_CERT=$(jq -r '.result.Cert' cert.out)
-          CA_CERT=$(jq -r '.result.ServerInfo.CAChain' cert.out)
-          IPK=$(jq -r '.result.ServerInfo.IssuerPublicKey' cert.out | base64 | tr -d '\n')
-          IRPK=$(jq -r '.result.ServerInfo.IssuerRevocationPublicKey' cert.out)
-          SECRET=$(echo '{"metadata":{"name":"msp"},"type":"Opaque"}' | \
-            jq -r --arg a ${ADMIN_CERT} --arg b ${CA_CERT} --arg c ${IPK} --arg d ${IRPK} \
-              '.data.admincert = $a | .data.cacert = $b | .data.IssuerPublicKey = $c | .data.IssuerRevocationPublicKey = $d')
-          KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) 
-          NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace) 
-          curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d "${SECRET}" https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets || exit 1
-          echo "##### 5. Finish - Save bootstrap user's MSP data into secret #####"
-
-          echo "##### 6. Start - Save bootstrap user's key into secret #####"
-          ADMIN_KEY=$(base64 my.key | tr -d '\n')
-          SECRET=$(echo '{"metadata":{"name":"admin-key"},"type":"Opaque"}' | \
-            jq -r --arg a ${ADMIN_KEY} \
-              '.data.key = $a')
-          curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d "${SECRET}" https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets || exit 1
-          echo "##### 6. Finish - Save bootstrap user's key into secret #####"
+          echo "##### 3. Start - Save genesis.block as Secret #####"
+          GENESIS_BLOCK=$(base64 genesis.block)
+          SECRET=$(echo '{"metadata":{"name":"genesis"},"type":"Opaque","data":{"genesis.block":""}}' | \
+            jq -r --arg a ${GENESIS} '.data."genesis.block" = $a')
+          curl -X POST \
+            --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+            -H "Authorization: Bearer $KUBE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "${SECRET}" \
+            https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/orderer/secrets || exit 1
+          echo "##### 3. Finish - Save genesis.block as Secret #####"
+        env:
+        - name: BINARY_URL
+          value: http://bit.ly/2ysbOFE
+        volumeMounts:
+        - name: configtx
+          mountPath: /root/configtx.yaml
+          subPath: configtx.yaml
+      volumes:
+      - name: configtx
+        configMap:
+          name: configtx
       serviceAccountName: genesis-admin
       restartPolicy: OnFailure

@@ -22,7 +22,7 @@ data:
   FABRIC_LOGGING_SPEC: INFO
   ORDERER_GENERAL_LISTENADDRESS: 0.0.0.0
   ORDERER_GENERAL_GENESISMETHOD: file
-  ORDERER_GENERAL_GENESISFILE: /etc/hyperledger/fabric/genesis/genesis.block
+  ORDERER_GENERAL_GENESISFILE: /etc/hyperledger/fabric/genesis.block
   ORDERER_GENERAL_LOCALMSPID: Orderer
   ORDERER_GENERAL_LOCALMSPDIR: /var/hyperledger/msp
 ---
@@ -56,9 +56,9 @@ spec:
         - |
           if [ ! -d /hyperledger/msp ]; then
             echo "Register orderer: ${HOSTNAME}"
-            fabric-ca-client register -M /var/admin/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type orderer --id.maxenrollments 1 --id.secret peerpw || exit 1
+            fabric-ca-client register -M /var/admin/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type orderer --id.maxenrollments 1 --id.secret ordererpw || exit 1
             echo "Get MSP certificates: ${HOSTNAME}"
-            fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:peerpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=orderer.com || exit 1
+            fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:ordererpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=orderer.com || exit 1
             mkdir /hyperledger/msp/admincerts
             cp /var/admin/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
           fi
@@ -83,7 +83,8 @@ spec:
         - name: orderer-data
           mountPath: /var/hyperledger
         - name: genesis-block
-          mountPath: /etc/hyperledger/fabric/genesis
+          mountPath: /etc/hyperledger/fabric/genesis.block
+          subPath: genesis.block
         readinessProbe:
           tcpSocket:
             port: 7050
