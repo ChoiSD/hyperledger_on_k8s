@@ -26,6 +26,24 @@ data:
   ORDERER_GENERAL_LOCALMSPID: Orderer
   ORDERER_GENERAL_LOCALMSPDIR: /var/hyperledger/msp
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scripts
+  namespace: orderer
+data:
+  mk-msp.sh: |
+    #!/bin/sh
+    SRC_PATH=$1
+    SRC_KEY_PATH=$2
+    echo "##### Create MSP directory #####"
+    mkdir -p /root/msp/signcerts /root/msp/keystore /root/msp/cacerts /root/msp/user
+    cp ${SRC_PATH}/admincert /root/msp/signcerts/cert.pem
+    cp ${SRC_PATH}/cacert /root/msp/cacerts/ca.epm
+    cp ${SRC_PATH}/IssuerPublicKey /root/msp/IssuerPublicKey
+    cp ${SRC_PATH}/IssuerRevocationPublicKey /root/msp/IssuerRevocationPublicKey
+    cp ${SRC_KEY_PATH} /root/msp/keystore/private.key
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -55,12 +73,13 @@ spec:
         args:
         - |
           if [ ! -d /hyperledger/msp ]; then
-            echo "Register orderer: ${HOSTNAME}"
-            fabric-ca-client register -M /var/admin/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type orderer --id.maxenrollments 1 --id.secret ordererpw || exit 1
-            echo "Get MSP certificates: ${HOSTNAME}"
+            /scripts/mk-msp.sh /var/msp /var/admin-key/key
+            echo "##### Register orderer: ${HOSTNAME} #####"
+            fabric-ca-client register -M /root/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type orderer --id.maxenrollments 1 --id.secret ordererpw || exit 1
+            echo "##### Get MSP certificates: ${HOSTNAME} #####"
             fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:ordererpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=orderer.com || exit 1
             mkdir /hyperledger/msp/admincerts
-            cp /var/admin/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
+            cp /root/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
           fi
         env:
         - name: FABRIC_CA_SERVER
@@ -68,12 +87,20 @@ spec:
         volumeMounts:
         - name: orderer-data
           mountPath: /hyperledger
-        - name: admin-cert
-          mountPath: /var/admin
+        - name: msp
+          mountPath: /var/msp
+        - name: admin-key
+          mountPath: /var/admin-key
+        - name: scripts
+          mountPath: /scripts
       containers:
       - name: orderer
         image: hyperledger/fabric-orderer:1.4.1
-        command: ["orderer"]
+        command: ['sh','-c']
+        args:
+        - |
+          sleep 30
+          orderer
         ports:
         - containerPort: 7050
         envFrom:
@@ -88,33 +115,28 @@ spec:
         readinessProbe:
           tcpSocket:
             port: 7050
-          initialDelaySeconds: 10
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 7050
+          initialDelaySeconds: 15
           periodSeconds: 20
       volumes:
-      - name: admin-cert
+      - name: msp
         secret:
-          secretName: admin
-          items:
-          - key: cert
-            path: msp/signcerts/cert.pem
-            mode: 0644
-          - key: key
-            path: msp/keystore/private.key
-            mode: 0600
-          - key: CA
-            path: msp/cacerts/ca.pem
-            mode: 0644
-          - key: user
-            path: msp/user/empty
-          - key: IssuerRevocationPublicKey
-            path: msp/IssuerRevocationPublicKey
-            mode: 0644
-          - key: IssuerPublicKey
-            path: msp/IssuerPublicKey
-            mode: 0644
+          secretName: msp
+      - name: admin-key
+        secret:
+          secretName: admin-key
+          defaultMode: 0600
       - name: genesis-block
         secret:
           secretName: genesis
+      - name: scripts
+        configMap:
+          name: scripts
+          defaultMode: 0744
   volumeClaimTemplates:
   - metadata:
       name: orderer-data

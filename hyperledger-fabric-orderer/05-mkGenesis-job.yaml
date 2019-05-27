@@ -152,8 +152,8 @@ spec:
 
           echo "##### 3. Start - Save genesis.block as Secret #####"
           GENESIS_BLOCK=$(base64 genesis.block)
-          SECRET=$(echo '{"metadata":{"name":"genesis"},"type":"Opaque","data":{"genesis.block":""}}' | \
-            jq -r --arg a ${GENESIS} '.data."genesis.block" = $a')
+          SECRET=$(echo '{"metadata":{"name":"genesis"},"type":"Opaque"}' | \
+            jq -r --arg a ${GENESIS_BLOCK} '.data."genesis.block" = $a')
           curl -X POST \
             --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
             -H "Authorization: Bearer $KUBE_TOKEN" \

@@ -117,6 +117,16 @@ spec:
           mountPath: /host/var/docker.sock
         - name: peer-data
           mountPath: /var/hyperledger
+        readinessProbe:
+          tcpSocket:
+            port: 7051
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 7051
+          initialDelaySeconds: 15
+          periodSeconds: 20
       volumes:
       - name: docker-sock
         hostPath:
