@@ -12,17 +12,14 @@ spec:
     spec:
       containers:
       - name: bootstrap-identity
-        image: alpine:latest
+        image: quay.io/choisd/hlf-bootstrap:alpine
         command: ["sh","-c"]
         args:
         - |
           mkdir -p /var/wallet &&
           cd /var/wallet &&
-          echo "##### 1. Start - Install required packages #####"
-          apk add --no-cache curl openssl jq > /dev/null || exit 1
-          echo "##### 1. Finish - Install required packages #####"
           
-          echo "##### 2. Start - Generate bootstrap user's key pair #####"
+          echo "##### 1. Start - Generate bootstrap user's key pair #####"
           openssl ecparam -name prime256v1 -genkey -noout -out my.key 
           cat > openssl.cnf <<EOF
           [ req ]
@@ -33,9 +30,9 @@ spec:
           [ req_dn ]
           countryName         = KR
           EOF
-          echo "##### 2. Finish - Generate bootstrap user's key pair #####"
+          echo "##### 1. Finish - Generate bootstrap user's key pair #####"
 
-          echo "##### 3. Start - Make bootstrap user's CSR #####"
+          echo "##### 2. Start - Make bootstrap user's CSR #####"
           openssl req -new -sha256 -key my.key -out my.csr -config ./openssl.cnf -subj "/C=KR/ST=Seoul/L=Gangdong-gu/O=org1.com/OU=admin/CN=admin"
           CSR=$(cat my.csr | tr '\n' '_' | sed 's/\_/\\n/g')
           until nslookup ${FABRIC_CA_SERVER} > /dev/null
@@ -43,13 +40,13 @@ spec:
             echo "Failed to resolve CA server: ${FABRIC_CA_SERVER}"
             sleep 30
           done
-          echo "##### 3. Finish - Make bootstrap user's CSR #####"
+          echo "##### 2. Finish - Make bootstrap user's CSR #####"
 
-          echo "##### 4. Start - Get bootstrap user's certificate #####"
+          echo "##### 3. Start - Get bootstrap user's certificate #####"
           curl -o cert.out -X POST --user admin:adminpw -H "Content-Type: application/json" http://${FABRIC_CA_SERVER}:7054/api/v1/enroll -d '{"certificate_request":"'"${CSR::-2}"'"}' || exit 1
-          echo "##### 4. Finish - Get bootstrap user's certificate #####"
+          echo "##### 3. Finish - Get bootstrap user's certificate #####"
 
-          echo "##### 5. Start - Save bootstrap user's MSP data into secret #####"
+          echo "##### 4. Start - Save bootstrap user's MSP data into secret #####"
           ADMIN_CERT=$(jq -r '.result.Cert' cert.out)
           CA_CERT=$(jq -r '.result.ServerInfo.CAChain' cert.out)
           IPK=$(jq -r '.result.ServerInfo.IssuerPublicKey' cert.out | base64 | tr -d '\n')
@@ -60,15 +57,15 @@ spec:
           KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) 
           NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace) 
           curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d "${SECRET}" https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets || exit 1
-          echo "##### 5. Finish - Save bootstrap user's MSP data into secret #####"
+          echo "##### 4. Finish - Save bootstrap user's MSP data into secret #####"
 
-          echo "##### 6. Start - Save bootstrap user's key into secret #####"
+          echo "##### 5. Start - Save bootstrap user's key into secret #####"
           ADMIN_KEY=$(base64 my.key | tr -d '\n')
           SECRET=$(echo '{"metadata":{"name":"admin-key"},"type":"Opaque"}' | \
             jq -r --arg a ${ADMIN_KEY} \
               '.data.key = $a')
           curl -X POST --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt -H "Authorization: Bearer $KUBE_TOKEN" -H "Content-Type: application/json" -d "${SECRET}" https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${NAMESPACE}/secrets || exit 1
-          echo "##### 6. Finish - Save bootstrap user's key into secret #####"
+          echo "##### 5. Finish - Save bootstrap user's key into secret #####"
         env:
         - name: FABRIC_CA_SERVER
           value: ca.orderer
