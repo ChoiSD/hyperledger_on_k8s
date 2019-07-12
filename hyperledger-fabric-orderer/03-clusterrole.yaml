@@ -9,7 +9,7 @@ rules:
   - secrets
   verbs:
   - create
-  - read
+  - get
 ---
 kind: ServiceAccount
 apiVersion: v1

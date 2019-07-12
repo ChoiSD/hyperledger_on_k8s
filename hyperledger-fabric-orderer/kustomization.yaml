@@ -1,0 +1,6 @@
+configMapGenerator:
+- name: configtx
+  files:
+  - configtx.yaml
+resources:
+- 05-mkGenesis-job.yaml
