@@ -21,34 +21,56 @@ So I divided this guide into few steps. One for peer Organization, and one for o
 
 - ~~Deploy peers as a StatefulSet~~
 
-- Make for Orderer Org
+- ~~Make for Orderer Org~~
+
+- Enable Orderer cluster (Kafka & Raft)
+
+- Make CouchDB version
+
+- Enable TLS (mutual TLS also)
+
+- Make helm version
 
 ### Command
 
+Org1 - Create & Join a channel
+
 ```bash
-curl -sSL http://bit.ly/2ysbOFE | bash -d -s u
-mkdir -p {orderer,org1,org2}/{cacerts,admincerts}
-kubectl get secret/admin -n org1 -o json | ./jq -r '.data.CA' | base64 -d > org1/cacerts/ca.pem
-kubectl get secret/admin -n org1 -o json | ./jq -r '.data.cert' | base64 -d > org1/admincerts/admin.pem
-kubectl get secret/admin -n org2 -o json | ./jq -r '.data.CA' | base64 -d > org2/cacerts/ca.pem
-kubectl get secret/admin -n org2 -o json | ./jq -r '.data.cert' | base64 -d > org2/admincerts/admin.pem
-kubectl get secret/admin -n orderer -o json | ./jq -r '.data.CA' | base64 -d > orderer/cacerts/ca.pem
-kubectl get secret/admin -n orderer -o json | ./jq -r '.data.cert' | base64 -d > orderer/admincerts/admin.pem
+kubectl exec -it cli -n org1 -- mkdir /root/msp/admincerts
+kubectl exec -it cli -n org1 -- cp /root/msp/signcerts/cert.pem /root/msp/admincerts/
+kubectl exec -it cli -n org1 -- cp /root/artifacts/channel.tx /root/channel.tx
+kubectl exec -it cli -n org1 -- peer channel create -c testchannel -f /root/channel.tx -o orderer-0.orderer.orderer:7050
+kubectl exec -it cli -n org1 -- peer channel join -b testchannel.block
+```
 
-./bin/configtxgen -configPath $PWD -profile OrdererGenesis -channelID syschannel -outputBlock genesis.block
-kubectl create secret generic genesis -n orderer --from-file=./genesis.block
+Org2 - Join a channel
 
-kubectl apply -f orderer.yaml
+```bash
+kubectl exec -it cli -n org2 -- mkdir /root/msp/admincerts
+kubectl exec -it cli -n org2 -- cp /root/msp/signcerts/cert.pem /root/msp/admincerts/
+kubectl exec -it cli -n org2 -- peer channel fetch 0 -c testchannel -o orderer-0.orderer.orderer:7050
+kubectl exec -it cli -n org2 -- peer channel join -b testchannel_0.block
+```
 
-./bin/configtxgen -configPath $PWD -profile OrgsChannel -channelID channel1 -outputCreateChannelTx channel1.tx 
-./bin/configtxgen -configPath $PWD -profile OrgsChannel -channelID channel1 -outputAnchorPeersUpdate Org1channel1.tx -asOrg Org1
-./bin/configtxgen -configPath $PWD -profile OrgsChannel -channelID channel1 -outputAnchorPeersUpdate Org2channel1.tx -asOrg Org2
+Install & Instantiate a chaincode
 
-kubectl cp channel1.tx org1/cli:/root/channel1.tx
-kubectl exec -it cli -n org1 -- peer channel signconfigtx -f /root/channel1.tx 
-kubectl cp org1/cli:/root/channel1.tx channel1-SignByOrg1.tx
-kubectl cp channel1-SignByOrg1.tx org2/cli:/root/channel1.tx
-kubectl exec -it cli -n org2 -- peer channel create -o orderer-0.orderer.orderer:7050 -c channel1 -f /root/channel1.tx
+```bash
+# Install chaincode in Org1
+kubectl cp chaincode_example org1/cli:chaincode_example
+kubectl exec -it cli -n org1 -- mkdir -p /opt/gopath/src/chaincode_example
+kubectl exec -it cli -n org1 -- cp chaincode_example/*.go /opt/gopath/src/chaincode_example
+kubectl exec -it cli -n org1 -- peer chaincode install -n mycc -v 1.0 -p chaincode_example
+# Install chaincode in Org2
+kubectl cp chaincode_example org2/cli:chaincode_example
+kubectl exec -it cli -n org1 -- mkdir -p /opt/gopath/src/chaincode_example
+kubectl exec -it cli -n org1 -- cp chaincode_example/*.go /opt/gopath/src/chaincode_example
+kubectl exec -it cli -n org1 -- peer chaincode install -n mycc -v 1.0 -p chaincode_example
+# Instantiate chaincode
+kubectl exec -it cli -n org1 -- peer chaincode instantiate -o orderer-0.orderer.orderer:7050 -C testchannel -n mycc -v 1.0 -c '{"Args":["init","a","100","b","200"]}' -P "AND('Org1.peer','Org2.peer')"
+```
 
-kubectl cp Org1channel1.tx org1/cli:/root/Org1channel1.tx
+Query chaincode 
+
+```bash
+kubectl exec -it cli -n org1 -- peer chaincode query -C testchannel -n mycc -c '{"Args":["query","a"]}'
 ```

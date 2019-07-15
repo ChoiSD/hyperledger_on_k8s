@@ -19,13 +19,15 @@ metadata:
   name: peer-env
   namespace: org1
 data:
-  CORE_PEER_GOSSIP_BOOTSTRAP: "peer-0.peer.org1:7051"
+  CORE_PEER_CHAINCODELISTENADDRESS: peer-0.peer.org1.svc.cluster.local:7052
+  CORE_PEER_GOSSIP_BOOTSTRAP: peer-0.peer.org1:7051
   CORE_PEER_GOSSIP_ORGLEADER: "false"
   CORE_PEER_GOSSIP_USELEADERELECTION: "true"
-  CORE_PEER_CHAINCODELISTENADDRESS: 0.0.0.0:7052
-  CORE_PEER_LOCALMSPID: Org1MSP
-  CORE_PEER_MSPCONFIGPATH: "/var/hyperledger/msp"
-  CORE_VM_ENDPOINT: "unix:///host/var/run/docker.sock"
+  CORE_PEER_LISTENADDRESS: 0.0.0.0:7051
+  CORE_PEER_LOCALMSPID: Org1
+  CORE_PEER_MSPCONFIGPATH: /var/hyperledger/msp
+  CORE_VM_DOCKER_HOSTCONFIG_DNS: 10.96.0.10
+  CORE_VM_ENDPOINT: unix:///host/var/run/docker.sock
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -38,7 +40,7 @@ data:
     SRC_PATH=$1
     SRC_KEY_PATH=$2
     echo "##### Create MSP directory #####"
-    mkdir -p /root/msp/signcerts /root/msp/keystore /root/msp/cacerts /root/msp/user
+    mkdir -p /root/msp/signcerts /root/msp/keystore /root/msp/cacerts /root/msp/user 
     cp ${SRC_PATH}/admincert /root/msp/signcerts/cert.pem
     cp ${SRC_PATH}/cacert /root/msp/cacerts/ca.pem
     cp ${SRC_PATH}/IssuerPublicKey /root/msp/IssuerPublicKey
@@ -115,7 +117,7 @@ spec:
           containerPort: 7052
         volumeMounts:
         - name: docker-sock
-          mountPath: /host/var/docker.sock
+          mountPath: /host/var/run/docker.sock
         - name: peer-data
           mountPath: /var/hyperledger
         readinessProbe:

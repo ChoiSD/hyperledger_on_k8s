@@ -9,7 +9,7 @@ data:
     Organizations:
     - &Org1
       Name: Org1
-      ID: Org1MSP
+      ID: Org1
       MSPDir: org1
       Policies:
         Readers:
@@ -26,7 +26,7 @@ data:
         Port: 7051
     - &Org2
       Name: Org2
-      ID: Org2MSP
+      ID: Org2
       MSPDir: org2
       Policies:
         Readers:
@@ -43,7 +43,7 @@ data:
         Port: 7051
     - &Orderer
       Name: Orderer
-      ID: OrdererMSP
+      ID: Orderer
       MSPDir: orderer
       Policies:
         Readers:
@@ -148,11 +148,10 @@ spec:
     spec:
       containers:
       - name: generate-genesis
-        image: hyperledger/fabric-tools:1.4.1
+        image: quay.io/choisd/hlf-configtxgen:alpine
         command: ["sh","-c"]
         args:
         - |
-          # Download hyperledger-fabric binaries
           # Get MSP for org1
           # Get MSP for org2
           # Get MSP for orderer
@@ -174,23 +173,21 @@ spec:
               https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${ORG}/secrets/msp || exit 1
             mkdir -p /root/${ORG}/admincerts /root/${ORG}/cacerts
             jq -r '.data.admincert' ${ORG}.json | base64 -d > /root/${ORG}/admincerts/admin.pem
-            jq -r '.data.cacert' ${ORG}.json | base64 -d > /root/${ORG}/cacerts/ca.pem
+            jq -r '.data.cacert'    ${ORG}.json | base64 -d > /root/${ORG}/cacerts/ca.pem
             echo "##### 1. Finish - Get ${ORG}'s MSP data #####"
           done
 
           echo "##### 2. Start - Generate genesis.block, channel config tx, anchor peer tx #####"
-          wget -O /root/install.sh ${BINARY_URL} || exit 1
           cd /root
-          bash ./install.sh -d -s || exit 1
-          /root/bin/configtxgen -configPath $PWD -profile GenesisProfile -channelID syschannel -outputBlock genesis.block || exit 1
-          /root/bin/configtxgen -configPath $PWD -profile ChannelProfile -channelID ${CHANNEL_NAME} -outputCreateChannelTx ${CHANNEL_NAME}.tx || exit 1
-          /root/bin/configtxgen -configPath $PWD -profile ChannelProfile -channelID ${CHANNEL_NAME} -outputAnchorPeersUpdate ${CHANNEL_NAME}-org1.tx -asOrg Org1 || exit 1
-          /root/bin/configtxgen -configPath $PWD -profile ChannelProfile -channelID ${CHANNEL_NAME} -outputAnchorPeersUpdate ${CHANNEL_NAME}-org2.tx -asOrg Org2 || exit 1
+          configtxgen -configPath $PWD -profile GenesisProfile -channelID syschannel -outputBlock genesis.block || exit 1
+          configtxgen -configPath $PWD -profile ChannelProfile -channelID ${CHANNEL_NAME} -outputCreateChannelTx ${CHANNEL_NAME}.tx || exit 1
+          configtxgen -configPath $PWD -profile ChannelProfile -channelID ${CHANNEL_NAME} -outputAnchorPeersUpdate ${CHANNEL_NAME}-org1.tx -asOrg Org1 || exit 1
+          configtxgen -configPath $PWD -profile ChannelProfile -channelID ${CHANNEL_NAME} -outputAnchorPeersUpdate ${CHANNEL_NAME}-org2.tx -asOrg Org2 || exit 1
           echo "##### 2. Finish - Generate genesis.block #####"
 
           echo "##### 3. Start - Save genesis.block as Secret #####"
-          GENESIS_BLOCK=$(base64 genesis.block)
-          SECRET=$(echo '{"kind":"Secret","metadata":{"name":"genesis"},"type":"Opaque"}' | \
+          GENESIS_BLOCK=$(base64 genesis.block | tr -d '\n')
+          SECRET=$(echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"genesis"},"type":"Opaque"}' | \
             jq -r --arg a ${GENESIS_BLOCK} '.data."genesis.block" = $a')
           curl -X POST \
             --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
@@ -198,42 +195,25 @@ spec:
             -H "Content-Type: application/json" \
             -d "${SECRET}" \
             https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/orderer/secrets || exit 1
-          echo "Genesis block has been registered."
-          ORG=org1
-          CHANNEL_TX=$(base64 ${CHANNEL_NAME}.tx)
-          SECRET=$(echo '{"kind":"Secret","metadata":{"name":"channeltx"},"type":"Opaque"}' | \
+          echo "Genesis block - Registered."
+          CHANNEL_TX=$(base64 ${CHANNEL_NAME}.tx | tr -d '\n')
+          SECRET=$(echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"artifacts"},"type":"Opaque"}' | \
             jq -r --arg a ${CHANNEL_TX} '.data."channel.tx" = $a')
-          curl -X POST \
-            --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-            -H "Authorization: Bearer $KUBE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "${SECRET}" \
-            https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${ORG}/secrets || exit 1
-          echo "Channel(${CHANNEL_NAME}) config tx has been registered."
-          ANCHOR_TX=$(base64 ${CHANNEL_NAME}-org1.tx)
-          SECRET=$(echo '{"kind":"Secret","metadata":{"name":"anchor-org1"},"type":"Opaque"}' | \
-            jq -r --arg a ${ANCHOR_TX} '.data."anchor.tx" = $a')
-          curl -X POST \
-            --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-            -H "Authorization: Bearer $KUBE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "${SECRET}" \
-            https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${ORG}/secrets || exit 1
-          echo "Anchor PeerUpdate tx for org1 has been registered."
-          ANCHOR_TX=$(base64 ${CHANNEL_NAME}-org2.tx)
-          SECRET=$(echo '{"type":"Secret","metadata":{"name":"anchor-org2"},"type":"Opaque"}' | \
-            jq -r --arg a ${ANCHOR_TX} '.data."anchor.tx" = $a')
-          curl -X POST \
-            --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-            -H "Authorization: Bearer $KUBE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "${SECRET}" \
-            https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${ORG}/secrets || exit 1
-          echo "Anchor PeerUpdate tx for org2 has been registered."
+
+          for ORG in org1 org2
+          do
+            ANCHOR_TX=$(base64 ${CHANNEL_NAME}-${ORG}.tx | tr -d '\n')
+            SECRET_ORG=$(echo $SECRET | jq -r --arg a ${ANCHOR_TX} '.data."anchor.tx" = $a')
+            curl -X POST \
+              --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+              -H "Authorization: Bearer $KUBE_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "${SECRET_ORG}" \
+              https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${ORG}/secrets || exit 1
+            echo "Channel(${CHANNEL_NAME}) config tx for ${ORG} has been registered."
+          done
           echo "##### 3. Finish - Save genesis.block as Secret #####"
         env:
-        - name: BINARY_URL
-          value: http://bit.ly/2ysbOFE
         - name: CHANNEL_NAME
           value: testchannel
         volumeMounts:

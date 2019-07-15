@@ -37,6 +37,8 @@ spec:
       mountPath: /var/admin-key
     - name: scripts
       mountPath: /scripts
+    - name: artifacts
+      mountPath: /root/artifacts
   volumes:
   - name: msp
     secret:
@@ -49,3 +51,7 @@ spec:
     configMap:
       name: scripts
       defaultMode: 0744
+  - name: artifacts
+    secret:
+      secretName: artifacts
+      defaultMode: 0660
