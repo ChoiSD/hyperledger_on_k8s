@@ -1,0 +1,156 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: peer
+  namespace: org1
+  labels:
+    app: hyperledger-fabric
+    component: peer
+spec:
+  clusterIP: None
+  selector:
+    app: hyperledger-fabric
+    component: peer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: peer-env
+  namespace: org1
+data:
+  CORE_PEER_CHAINCODELISTENADDRESS: peer-0.peer.org1.svc.cluster.local:7052
+  CORE_PEER_GOSSIP_BOOTSTRAP: peer-0.peer.org1:7051
+  CORE_PEER_GOSSIP_ORGLEADER: "false"
+  CORE_PEER_GOSSIP_USELEADERELECTION: "true"
+  CORE_PEER_LISTENADDRESS: 0.0.0.0:7051
+  CORE_PEER_LOCALMSPID: Org1
+  CORE_PEER_MSPCONFIGPATH: /var/hyperledger/msp
+  CORE_VM_DOCKER_HOSTCONFIG_DNS: 10.96.0.10
+  CORE_VM_ENDPOINT: unix:///host/var/run/docker.sock
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scripts
+  namespace: org1
+data:
+  mk-msp.sh: |
+    #!/bin/sh
+    SRC_PATH=$1
+    SRC_KEY_PATH=$2
+    echo "##### Create MSP directory #####"
+    mkdir -p /root/msp/signcerts /root/msp/keystore /root/msp/cacerts /root/msp/user 
+    cp ${SRC_PATH}/admincert /root/msp/signcerts/cert.pem
+    cp ${SRC_PATH}/cacert /root/msp/cacerts/ca.pem
+    cp ${SRC_PATH}/IssuerPublicKey /root/msp/IssuerPublicKey
+    cp ${SRC_PATH}/IssuerRevocationPublicKey /root/msp/IssuerRevocationPublicKey
+    cp ${SRC_KEY_PATH} /root/msp/keystore/private.key
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: peer
+  namespace: org1
+  labels:
+    app: hyperledger-fabric
+    component: peer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hyperledger-fabric
+      component: peer
+  serviceName: "peer"
+  template:
+    metadata:
+      labels:
+        app: hyperledger-fabric
+        component: peer
+        version: 1.4.1
+    spec:
+      initContainers:
+      - name: init-peer
+        image: hyperledger/fabric-ca:1.4.1
+        command: ['sh', '-c']
+        args:
+        - |
+          if [ ! -d /hyperledger/msp ]; then
+            /scripts/mk-msp.sh /var/msp /var/admin-key/key
+            echo "##### Register peer: ${HOSTNAME} #####"
+            fabric-ca-client register -M /root/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type peer --id.maxenrollments 1 --id.secret peerpw || exit 1
+            echo "##### Get MSP certificates: ${HOSTNAME} #####"
+            fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:peerpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=org1.com || exit 1
+            mkdir /hyperledger/msp/admincerts
+            cp /root/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
+          fi
+        env:
+        - name: FABRIC_CA_SERVER
+          value: ca.org1
+        volumeMounts:
+        - name: peer-data
+          mountPath: /hyperledger
+        - name: msp
+          mountPath: /var/msp
+        - name: admin-key
+          mountPath: /var/admin-key
+        - name: scripts
+          mountPath: /scripts
+      containers:
+      - name: peer
+        image: hyperledger/fabric-peer:1.4.1
+        command: ['sh', '-c']
+        args: 
+        - |
+          export CORE_PEER_ID=${HOSTNAME};
+          export CORE_PEER_ADDRESS=${HOSTNAME}.peer.org1:7051;
+          export CORE_PEER_GOSSIP_EXTERNALENDPOINT=${HOSTNAME}.peer.org1:7051;
+          sleep 30
+          peer node start
+        envFrom:
+        - configMapRef:
+            name: peer-env
+        ports:
+        - name: interface
+          containerPort: 7051
+        - name: chaincode
+          containerPort: 7052
+        volumeMounts:
+        - name: docker-sock
+          mountPath: /host/var/run/docker.sock
+        - name: peer-data
+          mountPath: /var/hyperledger
+        readinessProbe:
+          tcpSocket:
+            port: 7051
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 7051
+          initialDelaySeconds: 15
+          periodSeconds: 20
+      volumes:
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+      - name: msp
+        secret:
+          secretName: msp
+      - name: admin-key
+        secret:
+          secretName: admin-key
+          defaultMode: 0600
+      - name: scripts
+        configMap:
+          name: scripts
+          defaultMode: 0744
+  volumeClaimTemplates:
+  - metadata:
+      name: peer-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local
+      resources:
+        requests:
+          storage: 5Gi

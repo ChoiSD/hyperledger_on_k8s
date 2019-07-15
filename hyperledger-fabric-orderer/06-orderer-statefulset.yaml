@@ -1,0 +1,148 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orderer
+  namespace: orderer
+  labels:
+    app: hyperledger-fabric
+    component: orderer
+spec:
+  clusterIP: None
+  selector:
+    app: hyperledger-fabric
+    component: orderer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orderer-env
+  namespace: orderer
+data:
+  FABRIC_LOGGING_SPEC: INFO
+  ORDERER_GENERAL_LISTENADDRESS: 0.0.0.0
+  ORDERER_GENERAL_GENESISMETHOD: file
+  ORDERER_GENERAL_GENESISFILE: /etc/hyperledger/fabric/genesis.block
+  ORDERER_GENERAL_LOCALMSPID: Orderer
+  ORDERER_GENERAL_LOCALMSPDIR: /var/hyperledger/msp
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scripts
+  namespace: orderer
+data:
+  mk-msp.sh: |
+    #!/bin/sh
+    SRC_PATH=$1
+    SRC_KEY_PATH=$2
+    echo "##### Create MSP directory #####"
+    mkdir -p /root/msp/signcerts /root/msp/keystore /root/msp/cacerts /root/msp/user
+    cp ${SRC_PATH}/admincert /root/msp/signcerts/cert.pem
+    cp ${SRC_PATH}/cacert /root/msp/cacerts/ca.epm
+    cp ${SRC_PATH}/IssuerPublicKey /root/msp/IssuerPublicKey
+    cp ${SRC_PATH}/IssuerRevocationPublicKey /root/msp/IssuerRevocationPublicKey
+    cp ${SRC_KEY_PATH} /root/msp/keystore/private.key
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: orderer
+  namespace: orderer
+  labels:
+    app: hyperledger-fabric
+    component: orderer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hyperledger-fabric
+      component: orderer
+  serviceName: "orderer"
+  template:
+    metadata:
+      labels:
+        app: hyperledger-fabric
+        component: orderer
+        releases: 1.4.1
+    spec:
+      initContainers:
+      - name: init-orderer
+        image: hyperledger/fabric-ca:1.4.1
+        command: ['sh', '-c']
+        args:
+        - |
+          if [ ! -d /hyperledger/msp ]; then
+            /scripts/mk-msp.sh /var/msp /var/admin-key/key
+            echo "##### Register orderer: ${HOSTNAME} #####"
+            fabric-ca-client register -M /root/msp -u http://${FABRIC_CA_SERVER}:7054 --id.name ${HOSTNAME} --id.type orderer --id.maxenrollments 1 --id.secret ordererpw || exit 1
+            echo "##### Get MSP certificates: ${HOSTNAME} #####"
+            fabric-ca-client enroll -H /hyperledger -u http://${HOSTNAME}:ordererpw@${FABRIC_CA_SERVER}:7054 --csr.names C=KR,ST=Seoul,L=Gangdong-gu,O=orderer.com || exit 1
+            mkdir /hyperledger/msp/admincerts
+            cp /root/msp/signcerts/cert.pem /hyperledger/msp/admincerts/
+          fi
+        env:
+        - name: FABRIC_CA_SERVER
+          value: ca.orderer
+        volumeMounts:
+        - name: orderer-data
+          mountPath: /hyperledger
+        - name: msp
+          mountPath: /var/msp
+        - name: admin-key
+          mountPath: /var/admin-key
+        - name: scripts
+          mountPath: /scripts
+      containers:
+      - name: orderer
+        image: hyperledger/fabric-orderer:1.4.1
+        command: ['sh','-c']
+        args:
+        - |
+          sleep 30
+          orderer
+        ports:
+        - containerPort: 7050
+        envFrom:
+        - configMapRef:
+            name: orderer-env
+        volumeMounts:
+        - name: orderer-data
+          mountPath: /var/hyperledger
+        - name: genesis-block
+          mountPath: /etc/hyperledger/fabric/genesis.block
+          subPath: genesis.block
+        readinessProbe:
+          tcpSocket:
+            port: 7050
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 7050
+          initialDelaySeconds: 15
+          periodSeconds: 20
+      volumes:
+      - name: msp
+        secret:
+          secretName: msp
+      - name: admin-key
+        secret:
+          secretName: admin-key
+          defaultMode: 0600
+      - name: genesis-block
+        secret:
+          secretName: genesis
+      - name: scripts
+        configMap:
+          name: scripts
+          defaultMode: 0744
+  volumeClaimTemplates:
+  - metadata:
+      name: orderer-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local
+      resources:
+        requests:
+          storage: 5Gi

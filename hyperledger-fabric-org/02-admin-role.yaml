@@ -1,0 +1,33 @@
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: secret-edit
+  namespace: org1
+rules:
+- apiGroups: [""]
+  resources:
+  - secrets
+  verbs:
+  - create
+  - read
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: admin
+  namespace: org1
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: admin
+  namespace: org1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: secret-edit
+subjects:
+- kind: ServiceAccount
+  name: admin
+  namespace: org1
