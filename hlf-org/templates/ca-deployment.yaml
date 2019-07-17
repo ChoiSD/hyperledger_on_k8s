@@ -1,0 +1,50 @@
+{{ $namespace := .Values.namespace }}
+{{ $version := .Values.version }}
+---
+{{- with .Values.ca.root }}
+{{ $mspdir := "/etc/hyperledger/fabric-ca/msp" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ default "ca" .name }}
+  namespace: {{ $namespace }}
+  labels:
+    app: hyperledger-fabric
+    component: ca-root
+spec:
+  replicas: 1
+  selector:
+    matchLables:
+      app: hyperledger-fabric
+      component: ca-root
+      version: {{ default "1.4.1" $version }}
+  template:
+    metadata:
+      labels:
+        app: hyperledger-fabric
+        component: ca-root
+        version: {{ default "1.4.1" $version }}
+    spec:
+      containers:
+      - name: ca
+        image: {{ printf "hyperledger/fabric-ca:%s" $version }}
+        command: ["sh", "-c"]
+        args:
+        {{- if .bootstrap }}
+        {{ .bootstrap.pwd | printf "- fabric-ca-server start -b %s:%s" .bootstrap.user }}
+        {{- else }}
+        - fabric-ca-server start -b admin:adminpw
+        {{- end }}
+        ports:
+        - containerPort: 7054
+        volumeMounts:
+        {{- if .privateKey }}
+        - name: ca-root
+          mountPath: /etc/hyperledger/fabric-ca/msp
+        {{- end }}
+        readinessProbe:
+          tcpSocket:
+            port: 7054
+          initialDelaySeconds: 30
+          periodSeconds: 20
+{{- end }}

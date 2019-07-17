@@ -1,0 +1,15 @@
+[ req ]
+default_bits            = 256
+default_md              = sha256
+default_keyfile         = private.key
+distinguished_name      = req_distinguished_name
+extensions              = v3_user
+
+[ v3_user ]
+keyUsage                = critical, digitalSignature, keyEncipherment, keyCertSign, cRLSign
+extendedKeyUsage        = anyExtendedKeyUsage
+basicConstraints        = CA:TRUE
+subjectKeyIdentifier    = hash
+
+[ req_distinguished_name ]
+countryName                     = KR
