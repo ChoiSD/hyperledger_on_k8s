@@ -2,26 +2,48 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-version: 1.4.1
-
 namespace: org1
 
 org:
   id: Org1MSP
   domain: org1.com
 
+################################################
+## Hyperledger Fabric CA server Configuration ##
+################################################
 ca:
+  ##----------------##
+  ## Root CA server ##
+  ##----------------##
   root:
-    name: ca1
-    privateKey: resource/ca/private.key
+    # Name of CA server
+    name: root-ca
+    # Public Certificate of CA server
     publicCert: resource/ca/cert.pem
+    # Private key of CA server
+    privateKey: resource/ca/private.key
+		# Chain file if exists
+		chainFile: {}
     bootstrap: #{} 
-      user: boot   # Bootstrap user for CA server, default: admin
-      pwd:  bootpw # Bootstrap password for CA server, default: adminpw
+      # Bootstrap user for CA server
+      user: boot   
+      # Bootstrap password for CA server, default: generated random string
+      #pwd:  bootpw 
     tls: 
+      # TLS enabled?
       enabled: false
+      # TLS private key
       tlsKey:
-      tlsCert: # ""
+      # TLS public certificate - should contain <ca.root.name>.<namespace> in SANS
+      tlsCert: 
+      # Mutual TLS
+      clientauth:
+        # Available values: NoClientCert(default), RequestClientCert, RequireAnyClientCert, VerifyClientCertIfGiven, RequireAndVerifyClientCert
+        type: NoClientCert
+        certfiles: []
+  ##------------------------##
+  ## Intermediate CA server ##
+  ##------------------------##
   intermediate:
     name: ca-intermediate
     replicas: 3
